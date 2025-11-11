@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - main
   pull_request:
 
 jobs:
@@ -14,10 +13,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Check annotated specs are up to date
+      - name: Run sync script
+        run: ./scripts/sync.py
+      - name: Check if annotated specs are up to date
         run: |
-          ./scripts/sync.py
           if [[ -n "$(git status --porcelain)" ]]; then
             git status --short
             exit 1
