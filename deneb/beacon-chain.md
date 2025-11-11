@@ -1,5 +1,47 @@
 # Deneb -- The Beacon Chain
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Introduction](#introduction)
+- [Custom types](#custom-types)
+- [Constants](#constants)
+  - [Blob](#blob)
+- [Preset](#preset)
+  - [Execution](#execution)
+- [Configuration](#configuration)
+  - [Execution](#execution-1)
+  - [Validator cycle](#validator-cycle)
+- [Containers](#containers)
+  - [Modified containers](#modified-containers)
+    - [`BeaconBlockBody`](#beaconblockbody)
+    - [`ExecutionPayload`](#executionpayload)
+    - [`ExecutionPayloadHeader`](#executionpayloadheader)
+    - [`BeaconState`](#beaconstate)
+- [Helper functions](#helper-functions)
+  - [Misc](#misc)
+    - [`kzg_commitment_to_versioned_hash`](#kzg_commitment_to_versioned_hash)
+  - [Beacon state accessors](#beacon-state-accessors)
+    - [Modified `get_attestation_participation_flag_indices`](#modified-get_attestation_participation_flag_indices)
+    - [New `get_validator_activation_churn_limit`](#new-get_validator_activation_churn_limit)
+- [Beacon chain state transition function](#beacon-chain-state-transition-function)
+  - [Execution engine](#execution-engine)
+    - [Request data](#request-data)
+      - [Modified `NewPayloadRequest`](#modified-newpayloadrequest)
+    - [Engine APIs](#engine-apis)
+      - [`is_valid_block_hash`](#is_valid_block_hash)
+      - [`is_valid_versioned_hashes`](#is_valid_versioned_hashes)
+      - [Modified `notify_new_payload`](#modified-notify_new_payload)
+      - [Modified `verify_and_notify_new_payload`](#modified-verify_and_notify_new_payload)
+  - [Block processing](#block-processing)
+    - [Modified `process_attestation`](#modified-process_attestation)
+    - [Execution payload](#execution-payload)
+      - [Modified `process_execution_payload`](#modified-process_execution_payload)
+    - [Modified `process_voluntary_exit`](#modified-process_voluntary_exit)
+  - [Epoch processing](#epoch-processing)
+    - [Registry updates](#registry-updates)
+
+<!-- mdformat-toc end -->
+
 ## Table of contents
 
 <!-- TOC -->
@@ -48,6 +90,18 @@
 
 ## Introduction
 
+Deneb is a consensus-layer upgrade containing a number of features. Including:
+
+- [EIP-4788](https://eips.ethereum.org/EIPS/eip-4788): Beacon block root in the
+  EVM
+- [EIP-4844](https://eips.ethereum.org/EIPS/eip-4844): Shard Blob Transactions
+  scale data-availability of Ethereum in a simple, forwards-compatible manner
+- [EIP-7044](https://eips.ethereum.org/EIPS/eip-7044): Perpetually Valid Signed
+  Voluntary Exits
+- [EIP-7045](https://eips.ethereum.org/EIPS/eip-7045): Increase Max Attestation
+  Inclusion Slot
+- [EIP-7514](https://eips.ethereum.org/EIPS/eip-7514): Add Max Epoch Churn Limit
+
 <!-- NOTES-BEGIN -->
 
 Deneb is a consensus-layer upgrade containing a number of features, most notably its flagship feature: **blobs**. Blobs are a new form of data storage that can be contained in transactions, like calldata. However, blobs have two key differences from calldata:
@@ -71,27 +125,26 @@ In addition to blobs, there are also a few relatively minor changes introduced i
 
 ## Custom types
 
-| Name | SSZ equivalent | Description |
-| - | - | - |
-| `VersionedHash` | `Bytes32` | *[New in Deneb:EIP4844]* |
-| `BlobIndex` | `uint64` | *[New in Deneb:EIP4844]* |
+| Name            | SSZ equivalent | Description              |
+| --------------- | -------------- | ------------------------ |
+| `VersionedHash` | `Bytes32`      | *[New in Deneb:EIP4844]* |
+| `BlobIndex`     | `uint64`       | *[New in Deneb:EIP4844]* |
 
 ## Constants
 
 ### Blob
 
-| Name | Value |
-| - | - |
+| Name                         | Value            |
+| ---------------------------- | ---------------- |
 | `VERSIONED_HASH_VERSION_KZG` | `Bytes1('0x01')` |
 
 ## Preset
 
 ### Execution
 
-| Name | Value | Description |
-| - | - | - |
-| `MAX_BLOB_COMMITMENTS_PER_BLOCK` | `uint64(2**12)` (= 4096) | *[New in Deneb:EIP4844]* hardfork independent fixed theoretical limit same as `LIMIT_BLOBS_PER_TX` (see EIP 4844) |
-| `MAX_BLOBS_PER_BLOCK`            | `uint64(6)` | *[New in Deneb:EIP4844]* maximum number of blobs in a single block limited by `MAX_BLOB_COMMITMENTS_PER_BLOCK` |
+| Name                             | Value                    | Description                                                                                                              |
+| -------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `MAX_BLOB_COMMITMENTS_PER_BLOCK` | `uint64(2**12)` (= 4096) | *[New in Deneb:EIP4844]* hardfork independent fixed theoretical limit same as `TARGET_BLOB_GAS_PER_BLOCK` (see EIP 4844) |
 
 <!-- NOTES-BEGIN -->
 
@@ -104,8 +157,8 @@ The `MAX_BLOB_COMMITMENTS_PER_BLOCK` corresponds to 4096 * 127 kB = 509 MB of bl
 
 ### Validator cycle
 
-| Name | Value |
-| - | - |
+| Name                                   | Value                |
+| -------------------------------------- | -------------------- |
 | `MAX_PER_EPOCH_ACTIVATION_CHURN_LIMIT` | `uint64(2**3)` (= 8) |
 
 <!-- NOTES-BEGIN -->
@@ -122,54 +175,30 @@ Note: `BeaconBlock` and `SignedBeaconBlock` types are updated indirectly.
 
 #### `BeaconBlockBody`
 
+*Note*: `BeaconBlock` and `SignedBeaconBlock` types are updated indirectly.
+
 ```python
 class BeaconBlockBody(Container):
     randao_reveal: BLSSignature
-    eth1_data: Eth1Data  # Eth1 data vote
-    graffiti: Bytes32  # Arbitrary data
-    # Operations
+    eth1_data: Eth1Data
+    graffiti: Bytes32
     proposer_slashings: List[ProposerSlashing, MAX_PROPOSER_SLASHINGS]
     attester_slashings: List[AttesterSlashing, MAX_ATTESTER_SLASHINGS]
     attestations: List[Attestation, MAX_ATTESTATIONS]
     deposits: List[Deposit, MAX_DEPOSITS]
     voluntary_exits: List[SignedVoluntaryExit, MAX_VOLUNTARY_EXITS]
     sync_aggregate: SyncAggregate
-    # Execution
-    execution_payload: ExecutionPayload  # [Modified in Deneb:EIP4844]
+    # [Modified in Deneb:EIP4844]
+    execution_payload: ExecutionPayload
     bls_to_execution_changes: List[SignedBLSToExecutionChange, MAX_BLS_TO_EXECUTION_CHANGES]
-    blob_kzg_commitments: List[KZGCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK]  # [New in Deneb:EIP4844]
+    # [New in Deneb:EIP4844]
+    blob_kzg_commitments: List[KZGCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK]
 ```
 
 #### `ExecutionPayload`
 
 ```python
 class ExecutionPayload(Container):
-    # Execution block header fields
-    parent_hash: Hash32
-    fee_recipient: ExecutionAddress  # 'beneficiary' in the yellow paper
-    state_root: Bytes32
-    receipts_root: Bytes32
-    logs_bloom: ByteVector[BYTES_PER_LOGS_BLOOM]
-    prev_randao: Bytes32  # 'difficulty' in the yellow paper
-    block_number: uint64  # 'number' in the yellow paper
-    gas_limit: uint64
-    gas_used: uint64
-    timestamp: uint64
-    extra_data: ByteList[MAX_EXTRA_DATA_BYTES]
-    base_fee_per_gas: uint256
-    # Extra payload fields
-    block_hash: Hash32  # Hash of execution block
-    transactions: List[Transaction, MAX_TRANSACTIONS_PER_PAYLOAD]
-    withdrawals: List[Withdrawal, MAX_WITHDRAWALS_PER_PAYLOAD]
-    blob_gas_used: uint64  # [New in Deneb:EIP4844]
-    excess_blob_gas: uint64  # [New in Deneb:EIP4844]
-```
-
-#### `ExecutionPayloadHeader`
-
-```python
-class ExecutionPayloadHeader(Container):
-    # Execution block header fields
     parent_hash: Hash32
     fee_recipient: ExecutionAddress
     state_root: Bytes32
@@ -182,12 +211,38 @@ class ExecutionPayloadHeader(Container):
     timestamp: uint64
     extra_data: ByteList[MAX_EXTRA_DATA_BYTES]
     base_fee_per_gas: uint256
-    # Extra payload fields
-    block_hash: Hash32  # Hash of execution block
+    block_hash: Hash32
+    transactions: List[Transaction, MAX_TRANSACTIONS_PER_PAYLOAD]
+    withdrawals: List[Withdrawal, MAX_WITHDRAWALS_PER_PAYLOAD]
+    # [New in Deneb:EIP4844]
+    blob_gas_used: uint64
+    # [New in Deneb:EIP4844]
+    excess_blob_gas: uint64
+```
+
+#### `ExecutionPayloadHeader`
+
+```python
+class ExecutionPayloadHeader(Container):
+    parent_hash: Hash32
+    fee_recipient: ExecutionAddress
+    state_root: Bytes32
+    receipts_root: Bytes32
+    logs_bloom: ByteVector[BYTES_PER_LOGS_BLOOM]
+    prev_randao: Bytes32
+    block_number: uint64
+    gas_limit: uint64
+    gas_used: uint64
+    timestamp: uint64
+    extra_data: ByteList[MAX_EXTRA_DATA_BYTES]
+    base_fee_per_gas: uint256
+    block_hash: Hash32
     transactions_root: Root
     withdrawals_root: Root
-    blob_gas_used: uint64  # [New in Deneb:EIP4844]
-    excess_blob_gas: uint64  # [New in Deneb:EIP4844]
+    # [New in Deneb:EIP4844]
+    blob_gas_used: uint64
+    # [New in Deneb:EIP4844]
+    excess_blob_gas: uint64
 ```
 
 ## Helper functions
@@ -209,28 +264,43 @@ To represent blobs with a 32-byte hash, we follow a two-step pipeline: `Blob -> 
 
 #### Modified `get_attestation_participation_flag_indices`
 
+*Note*: The function `get_attestation_participation_flag_indices` is modified to
+set the `TIMELY_TARGET_FLAG` for any correct target attestation, regardless of
+`inclusion_delay` as a baseline reward for any speed of inclusion of an
+attestation that contributes to justification of the contained chain for
+EIP-7045.
+
 ```python
-def get_attestation_participation_flag_indices(state: BeaconState,
-                                               data: AttestationData,
-                                               inclusion_delay: uint64) -> Sequence[int]:
+def get_attestation_participation_flag_indices(
+    state: BeaconState, data: AttestationData, inclusion_delay: uint64
+) -> Sequence[int]:
     """
     Return the flag indices that are satisfied by an attestation.
     """
+    # Matching source
     if data.target.epoch == get_current_epoch(state):
         justified_checkpoint = state.current_justified_checkpoint
     else:
         justified_checkpoint = state.previous_justified_checkpoint
-
-    # Matching roots
     is_matching_source = data.source == justified_checkpoint
-    is_matching_target = is_matching_source and data.target.root == get_block_root(state, data.target.epoch)
-    is_matching_head = is_matching_target and data.beacon_block_root == get_block_root_at_slot(state, data.slot)
+
+    # Matching target
+    target_root = get_block_root(state, data.target.epoch)
+    target_root_matches = data.target.root == target_root
+    is_matching_target = is_matching_source and target_root_matches
+
+    # Matching head
+    head_root = get_block_root_at_slot(state, data.slot)
+    head_root_matches = data.beacon_block_root == head_root
+    is_matching_head = is_matching_target and head_root_matches
+
     assert is_matching_source
 
     participation_flag_indices = []
     if is_matching_source and inclusion_delay <= integer_squareroot(SLOTS_PER_EPOCH):
         participation_flag_indices.append(TIMELY_SOURCE_FLAG_INDEX)
-    if is_matching_target:  # [Modified in Deneb:EIP7045]
+    # [Modified in Deneb:EIP7045]
+    if is_matching_target:
         participation_flag_indices.append(TIMELY_TARGET_FLAG_INDEX)
     if is_matching_head and inclusion_delay == MIN_ATTESTATION_INCLUSION_DELAY:
         participation_flag_indices.append(TIMELY_HEAD_FLAG_INDEX)
@@ -272,10 +342,13 @@ class NewPayloadRequest(object):
 
 ##### `is_valid_block_hash`
 
+*Note*: The function `is_valid_block_hash` is modified to include the additional
+`parent_beacon_block_root` parameter for EIP-4788.
+
 ```python
-def is_valid_block_hash(self: ExecutionEngine,
-                        execution_payload: ExecutionPayload,
-                        parent_beacon_block_root: Root) -> bool:
+def is_valid_block_hash(
+    self: ExecutionEngine, execution_payload: ExecutionPayload, parent_beacon_block_root: Root
+) -> bool:
     """
     Return ``True`` if and only if ``execution_payload.block_hash`` is computed correctly.
     """
@@ -291,20 +364,25 @@ EIP-4788 allows the EVM to access beacon block roots, which makes it easier to i
 ##### `is_valid_versioned_hashes`
 
 ```python
-def is_valid_versioned_hashes(self: ExecutionEngine, new_payload_request: NewPayloadRequest) -> bool:
+def is_valid_versioned_hashes(
+    self: ExecutionEngine, new_payload_request: NewPayloadRequest
+) -> bool:
     """
     Return ``True`` if and only if the version hashes computed by the blob transactions of
-    ``new_payload_request.execution_payload`` matches ``new_payload_request.version_hashes``.
+    ``new_payload_request.execution_payload`` matches ``new_payload_request.versioned_hashes``.
     """
     ...
 ```
 
 ##### Modified `notify_new_payload`
 
+*Note*: The function `notify_new_payload` is modified to include the additional
+`parent_beacon_block_root` parameter for EIP-4788.
+
 ```python
-def notify_new_payload(self: ExecutionEngine,
-                       execution_payload: ExecutionPayload,
-                       parent_beacon_block_root: Root) -> bool:
+def notify_new_payload(
+    self: ExecutionEngine, execution_payload: ExecutionPayload, parent_beacon_block_root: Root
+) -> bool:
     """
     Return ``True`` if and only if ``execution_payload`` is valid with respect to ``self.execution_state``.
     """
@@ -318,13 +396,18 @@ def notify_new_payload(self: ExecutionEngine,
 ##### Modified `verify_and_notify_new_payload`
 
 ```python
-def verify_and_notify_new_payload(self: ExecutionEngine,
-                                  new_payload_request: NewPayloadRequest) -> bool:
+def verify_and_notify_new_payload(
+    self: ExecutionEngine, new_payload_request: NewPayloadRequest
+) -> bool:
     """
     Return ``True`` if and only if ``new_payload_request`` is valid with respect to ``self.execution_state``.
     """
     execution_payload = new_payload_request.execution_payload
+    # [New in Deneb:EIP4788]
     parent_beacon_block_root = new_payload_request.parent_beacon_block_root
+
+    if b"" in execution_payload.transactions:
+        return False
 
     # [Modified in Deneb:EIP4788]
     if not self.is_valid_block_hash(execution_payload, parent_beacon_block_root):
@@ -345,19 +428,28 @@ def verify_and_notify_new_payload(self: ExecutionEngine,
 
 #### Modified `process_attestation`
 
+*Note*: The function `process_attestation` is modified to expand valid slots for
+inclusion to those in both `target.epoch` epoch and `target.epoch + 1` epoch for
+EIP-7045. Additionally, it utilizes an updated version of
+`get_attestation_participation_flag_indices` to ensure rewards are available for
+the extended attestation inclusion range for EIP-7045.
+
 ```python
 def process_attestation(state: BeaconState, attestation: Attestation) -> None:
     data = attestation.data
     assert data.target.epoch in (get_previous_epoch(state), get_current_epoch(state))
     assert data.target.epoch == compute_epoch_at_slot(data.slot)
-    assert data.slot + MIN_ATTESTATION_INCLUSION_DELAY <= state.slot  # [Modified in Deneb:EIP7045]
+    # [Modified in Deneb:EIP7045]
+    assert data.slot + MIN_ATTESTATION_INCLUSION_DELAY <= state.slot
     assert data.index < get_committee_count_per_slot(state, data.target.epoch)
 
     committee = get_beacon_committee(state, data.slot, data.index)
     assert len(attestation.aggregation_bits) == len(committee)
 
     # Participation flag indices
-    participation_flag_indices = get_attestation_participation_flag_indices(state, data, state.slot - data.slot)
+    participation_flag_indices = get_attestation_participation_flag_indices(
+        state, data, state.slot - data.slot
+    )
 
     # Verify signature
     assert is_valid_indexed_attestation(state, get_indexed_attestation(state, attestation))
@@ -371,12 +463,16 @@ def process_attestation(state: BeaconState, attestation: Attestation) -> None:
     proposer_reward_numerator = 0
     for index in get_attesting_indices(state, attestation):
         for flag_index, weight in enumerate(PARTICIPATION_FLAG_WEIGHTS):
-            if flag_index in participation_flag_indices and not has_flag(epoch_participation[index], flag_index):
+            if flag_index in participation_flag_indices and not has_flag(
+                epoch_participation[index], flag_index
+            ):
                 epoch_participation[index] = add_flag(epoch_participation[index], flag_index)
                 proposer_reward_numerator += get_base_reward(state, index) * weight
 
     # Reward proposer
-    proposer_reward_denominator = (WEIGHT_DENOMINATOR - PROPOSER_WEIGHT) * WEIGHT_DENOMINATOR // PROPOSER_WEIGHT
+    proposer_reward_denominator = (
+        (WEIGHT_DENOMINATOR - PROPOSER_WEIGHT) * WEIGHT_DENOMINATOR // PROPOSER_WEIGHT
+    )
     proposer_reward = Gwei(proposer_reward_numerator // proposer_reward_denominator)
     increase_balance(state, get_beacon_proposer_index(state), proposer_reward)
 ```
@@ -389,10 +485,15 @@ def process_attestation(state: BeaconState, attestation: Attestation) -> None:
 
 ##### Modified `process_execution_payload`
 
-*Note*: The function `process_execution_payload` is modified to pass `versioned_hashes` into `execution_engine.verify_and_notify_new_payload` and to assign the new fields in `ExecutionPayloadHeader` for EIP-4844. It is also modified to pass in the parent beacon block root to support EIP-4788.
+*Note*: The function `process_execution_payload` is modified to pass
+`versioned_hashes` into `execution_engine.verify_and_notify_new_payload` and to
+assign the new fields in `ExecutionPayloadHeader` for EIP-4844. It is also
+modified to pass in the parent beacon block root to support EIP-4788.
 
 ```python
-def process_execution_payload(state: BeaconState, body: BeaconBlockBody, execution_engine: ExecutionEngine) -> None:
+def process_execution_payload(
+    state: BeaconState, body: BeaconBlockBody, execution_engine: ExecutionEngine
+) -> None:
     payload = body.execution_payload
 
     # Verify consistency of the parent hash with respect to the previous execution payload header
@@ -400,19 +501,24 @@ def process_execution_payload(state: BeaconState, body: BeaconBlockBody, executi
     # Verify prev_randao
     assert payload.prev_randao == get_randao_mix(state, get_current_epoch(state))
     # Verify timestamp
-    assert payload.timestamp == compute_timestamp_at_slot(state, state.slot)
-
-    # [New in Deneb:EIP4844] Verify commitments are under limit
+    assert payload.timestamp == compute_time_at_slot(state, state.slot)
+    # [New in Deneb:EIP4844]
+    # Verify commitments are under limit
     assert len(body.blob_kzg_commitments) <= MAX_BLOBS_PER_BLOCK
 
+    # [New in Deneb:EIP4844]
+    # Compute list of versioned hashes
+    versioned_hashes = [
+        kzg_commitment_to_versioned_hash(commitment) for commitment in body.blob_kzg_commitments
+    ]
+
     # Verify the execution payload is valid
-    # [Modified in Deneb:EIP4844] Pass `versioned_hashes` to Execution Engine
-    # [Modified in Deneb:EIP4788] Pass `parent_beacon_block_root` to Execution Engine
-    versioned_hashes = [kzg_commitment_to_versioned_hash(commitment) for commitment in body.blob_kzg_commitments]
     assert execution_engine.verify_and_notify_new_payload(
         NewPayloadRequest(
             execution_payload=payload,
+            # [New in Deneb:EIP4844]
             versioned_hashes=versioned_hashes,
+            # [New in Deneb:EIP4788]
             parent_beacon_block_root=state.latest_block_header.parent_root,
         )
     )
@@ -434,12 +540,17 @@ def process_execution_payload(state: BeaconState, body: BeaconBlockBody, executi
         block_hash=payload.block_hash,
         transactions_root=hash_tree_root(payload.transactions),
         withdrawals_root=hash_tree_root(payload.withdrawals),
-        blob_gas_used=payload.blob_gas_used,  # [New in Deneb:EIP4844]
-        excess_blob_gas=payload.excess_blob_gas,  # [New in Deneb:EIP4844]
+        # [New in Deneb:EIP4844]
+        blob_gas_used=payload.blob_gas_used,
+        # [New in Deneb:EIP4844]
+        excess_blob_gas=payload.excess_blob_gas,
     )
 ```
 
 #### Modified `process_voluntary_exit`
+
+*Note*: The function `process_voluntary_exit` is modified to use the fixed fork
+version -- `CAPELLA_FORK_VERSION` -- for EIP-7044.
 
 ```python
 def process_voluntary_exit(state: BeaconState, signed_voluntary_exit: SignedVoluntaryExit) -> None:
@@ -455,7 +566,9 @@ def process_voluntary_exit(state: BeaconState, signed_voluntary_exit: SignedVolu
     assert get_current_epoch(state) >= validator.activation_epoch + SHARD_COMMITTEE_PERIOD
     # Verify signature
     # [Modified in Deneb:EIP7044]
-    domain = compute_domain(DOMAIN_VOLUNTARY_EXIT, CAPELLA_FORK_VERSION, state.genesis_validators_root)
+    domain = compute_domain(
+        DOMAIN_VOLUNTARY_EXIT, CAPELLA_FORK_VERSION, state.genesis_validators_root
+    )
     signing_root = compute_signing_root(voluntary_exit, domain)
     assert bls.Verify(validator.pubkey, signing_root, signed_voluntary_exit.signature)
     # Initiate exit
@@ -472,6 +585,10 @@ This allows signed `VoluntaryExit` operations to remain valid forever, even if t
 
 #### Registry updates
 
+*Note*: The function `process_registry_updates` is modified to utilize
+`get_validator_activation_churn_limit()` to rate limit the activation queue for
+EIP-7514.
+
 ```python
 def process_registry_updates(state: BeaconState) -> None:
     # Process activation eligibility and ejections
@@ -486,18 +603,21 @@ def process_registry_updates(state: BeaconState) -> None:
             initiate_validator_exit(state, ValidatorIndex(index))
 
     # Queue validators eligible for activation and not yet dequeued for activation
-    activation_queue = sorted([
-        index for index, validator in enumerate(state.validators)
-        if is_eligible_for_activation(state, validator)
+    activation_queue = sorted(
+        [
+            index
+            for index, validator in enumerate(state.validators)
+            if is_eligible_for_activation(state, validator)
+        ],
         # Order by the sequence of activation_eligibility_epoch setting and then index
-    ], key=lambda index: (state.validators[index].activation_eligibility_epoch, index))
+        key=lambda index: (state.validators[index].activation_eligibility_epoch, index),
+    )
     # Dequeued validators for activation up to activation churn limit
     # [Modified in Deneb:EIP7514]
-    for index in activation_queue[:get_validator_activation_churn_limit(state)]:
+    for index in activation_queue[: get_validator_activation_churn_limit(state)]:
         validator = state.validators[index]
         validator.activation_epoch = compute_activation_exit_epoch(get_current_epoch(state))
 ```
-
 <!-- NOTES-BEGIN -->
 
 *Note*: The function `process_registry_updates` is modified to utilize `get_validator_activation_churn_limit()` to rate limit the activation queue for EIP-7514.

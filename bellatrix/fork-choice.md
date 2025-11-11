@@ -23,20 +23,66 @@
 
 ## Introduction
 
-This is the modification of the beacon chain fork choice for the merge. There is only one significant change made: the additional requirement to verify that the terminal PoW block is valid.
+This is the modification of the fork choice according to the executable beacon
+chain proposal.
+
+Unless stated explicitly, all prior functionality from
+[Altair](../altair/fork-choice.md) is inherited.
+
+*Note*: It introduces the process of transition from the last PoW block to the
+first PoS block.
 
 ## Protocols
 
 ### `ExecutionEngine`
 
+*Note*: The `notify_forkchoice_updated` function is added to the
+`ExecutionEngine` protocol to signal the fork choice updates.
+
+The body of this function is implementation dependent. The Engine API may be
+used to implement it with an external execution engine.
+
 #### `notify_forkchoice_updated`
 
-When a beacon chain client reorgs, it should notify the execution client of the new head, so that the execution client returns the head and the state correctly in its APIs.
+This function performs three actions *atomically*:
+
+- Re-organizes the execution payload chain and corresponding state to make
+  `head_block_hash` the head.
+- Updates safe block hash with the value provided by `safe_block_hash`
+  parameter.
+- Applies finality to the execution state: it irreversibly persists the chain of
+  all execution payloads and corresponding state, up to and including
+  `finalized_block_hash`.
+
+Additionally, if `payload_attributes` is provided, this function sets in motion
+a payload build process on top of `head_block_hash` and returns an identifier of
+initiated process.
 
 ```python
-def notify_forkchoice_updated(self: ExecutionEngine, head_block_hash: Hash32, finalized_block_hash: Hash32) -> None:
-    ...
+def notify_forkchoice_updated(
+    self: ExecutionEngine,
+    head_block_hash: Hash32,
+    safe_block_hash: Hash32,
+    finalized_block_hash: Hash32,
+    payload_attributes: Optional[PayloadAttributes],
+) -> Optional[PayloadId]: ...
 ```
+
+*Note*: The `(head_block_hash, finalized_block_hash)` values of the
+`notify_forkchoice_updated` function call maps on the `POS_FORKCHOICE_UPDATED`
+event defined in the
+[EIP-3675](https://eips.ethereum.org/EIPS/eip-3675#definitions). As per
+EIP-3675, before a post-transition block is finalized,
+`notify_forkchoice_updated` MUST be called with
+`finalized_block_hash = Hash32()`.
+
+*Note*: Client software MUST NOT call this function until the transition
+conditions are met on the PoW network, i.e. there exists a block for which
+`is_valid_terminal_pow_block` function returns `True`.
+
+*Note*: Client software MUST call this function to initiate the payload build
+process to produce the merge transition block; the `head_block_hash` parameter
+MUST be set to the hash of a terminal PoW block in this case.
 
 ## Helpers
 
@@ -51,10 +97,16 @@ class PowBlock(Container):
     block_hash: Hash32
     parent_hash: Hash32
     total_difficulty: uint256
-    difficulty: uint256
 ```
 
 ### `get_pow_block`
+
+Let `get_pow_block(block_hash: Hash32) -> Optional[PowBlock]` be the function
+that given the hash of the PoW block returns its data. It may result in `None`
+if the requested block is not yet available.
+
+*Note*: The `eth_getBlockByHash` JSON-RPC method may be used to pull this
+information from an execution client.
 
 <!-- NOTES-BEGIN -->
 
@@ -62,11 +114,10 @@ Let `get_pow_block(block_hash: Hash32) -> PowBlock` be the function that given t
 
 ### `is_valid_terminal_pow_block`
 
+Used by fork-choice handler, `on_block`.
+
 ```python
 def is_valid_terminal_pow_block(block: PowBlock, parent: PowBlock) -> bool:
-    if block.block_hash == TERMINAL_BLOCK_HASH:
-        return True
-
     is_total_difficulty_reached = block.total_difficulty >= TERMINAL_TOTAL_DIFFICULTY
     is_parent_total_difficulty_valid = parent.total_difficulty < TERMINAL_TOTAL_DIFFICULTY
     return is_total_difficulty_reached and is_parent_total_difficulty_valid
@@ -80,60 +131,67 @@ There are two ways in which a block can be a valid terminal PoW block. First (an
 
 ### `on_block`
 
-*Note*: The only modification is the addition of the verification of transition block conditions.
+*Note*: The only modification is the addition of the verification of transition
+block conditions.
 
 ```python
 def on_block(store: Store, signed_block: SignedBeaconBlock) -> None:
+    """
+    Run ``on_block`` upon receiving a new block.
+
+    A block that is asserted as invalid due to unavailable PoW block may be valid at a later time,
+    consider scheduling it for later processing in such case.
+    """
     block = signed_block.message
     # Parent block must be known
     assert block.parent_root in store.block_states
     # Make a copy of the state to avoid mutability issues
     pre_state = copy(store.block_states[block.parent_root])
-    # Blocks cannot be in the future. If they are, their consideration must be delayed until the are in the past.
+    # Blocks cannot be in the future. If they are, their consideration must be delayed until they are in the past.
     assert get_current_slot(store) >= block.slot
 
     # Check that block is later than the finalized epoch slot (optimization to reduce calls to get_ancestor)
     finalized_slot = compute_start_slot_at_epoch(store.finalized_checkpoint.epoch)
     assert block.slot > finalized_slot
     # Check block is a descendant of the finalized block at the checkpoint finalized slot
-    assert get_ancestor(store, block.parent_root, finalized_slot) == store.finalized_checkpoint.root
+    finalized_checkpoint_block = get_checkpoint_block(
+        store,
+        block.parent_root,
+        store.finalized_checkpoint.epoch,
+    )
+    assert store.finalized_checkpoint.root == finalized_checkpoint_block
 
     # Check the block is valid and compute the post-state
     state = pre_state.copy()
+    block_root = hash_tree_root(block)
     state_transition(state, signed_block, True)
 
-    # [New in Merge]
-    if is_merge_block(pre_state, block.body):
-        pow_block = get_pow_block(block.body.execution_payload.parent_hash)
-        pow_parent = get_pow_block(pow_block.parent_hash)
-        assert is_valid_terminal_pow_block(pow_block, pow_parent)
+    # [New in Bellatrix]
+    if is_merge_transition_block(pre_state, block.body):
+        validate_merge_block(block)
 
     # Add new block to the store
-    store.blocks[hash_tree_root(block)] = block
+    store.blocks[block_root] = block
     # Add new state for this block to the store
-    store.block_states[hash_tree_root(block)] = state
+    store.block_states[block_root] = state
 
-    # Update justified checkpoint
-    if state.current_justified_checkpoint.epoch > store.justified_checkpoint.epoch:
-        if state.current_justified_checkpoint.epoch > store.best_justified_checkpoint.epoch:
-            store.best_justified_checkpoint = state.current_justified_checkpoint
-        if should_update_justified_checkpoint(store, state.current_justified_checkpoint):
-            store.justified_checkpoint = state.current_justified_checkpoint
+    # Add block timeliness to the store
+    seconds_since_genesis = store.time - store.genesis_time
+    time_into_slot_ms = seconds_to_milliseconds(seconds_since_genesis) % SLOT_DURATION_MS
+    epoch = get_current_store_epoch(store)
+    attestation_threshold_ms = get_attestation_due_ms(epoch)
+    is_before_attesting_interval = time_into_slot_ms < attestation_threshold_ms
+    is_timely = get_current_slot(store) == block.slot and is_before_attesting_interval
+    store.block_timeliness[hash_tree_root(block)] = is_timely
 
-    # Update finalized checkpoint
-    if state.finalized_checkpoint.epoch > store.finalized_checkpoint.epoch:
-        store.finalized_checkpoint = state.finalized_checkpoint
+    # Add proposer score boost if the block is timely and not conflicting with an existing block
+    is_first_block = store.proposer_boost_root == Root()
+    if is_timely and is_first_block:
+        store.proposer_boost_root = hash_tree_root(block)
 
-        # Potentially update justified if different from store
-        if store.justified_checkpoint != state.current_justified_checkpoint:
-            # Update justified if new justified is later than store justified
-            if state.current_justified_checkpoint.epoch > store.justified_checkpoint.epoch:
-                store.justified_checkpoint = state.current_justified_checkpoint
-                return
+    # Update checkpoints in store if necessary
+    update_checkpoints(store, state.current_justified_checkpoint, state.finalized_checkpoint)
 
-            # Update justified if store justified is not in chain with finalized checkpoint
-            finalized_slot = compute_start_slot_at_epoch(store.finalized_checkpoint.epoch)
-            ancestor_at_finalized_slot = get_ancestor(store, store.justified_checkpoint.root, finalized_slot)
-            if ancestor_at_finalized_slot != store.finalized_checkpoint.root:
-                store.justified_checkpoint = state.current_justified_checkpoint
+    # Eagerly compute unrealized justification and finality.
+    compute_pulled_up_tip(store, block_root)
 ```
