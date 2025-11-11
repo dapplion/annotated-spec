@@ -145,6 +145,22 @@ In addition to this work, I highly recommend Ben Edgington's [annotated spec](ht
 
 ## Introduction
 
+This document represents the specification for Phase 0 -- The Beacon Chain.
+
+At the core of Ethereum proof-of-stake is a system chain called the "beacon
+chain". The beacon chain stores and manages the registry of validators. In the
+initial deployment phases of proof-of-stake, the only mechanism to become a
+validator is to make a one-way ETH transaction to a deposit contract on the
+Ethereum proof-of-work chain. Activation as a validator happens when deposit
+receipts are processed by the beacon chain, the activation balance is reached,
+and a queuing process is completed. Exit is either voluntary or done forcibly as
+a penalty for misbehavior. The primary source of load on the beacon chain is
+"attestations". Attestations are simultaneously availability votes for a shard
+block (in a later upgrade) and proof-of-stake votes for a beacon block (Phase
+0).
+
+<!-- NOTES-BEGIN -->
+
 Ethereum 2.0 (aka eth2, aka Serenity) is the next major version of the Ethereum protocol, and is the culmination of [years](https://blog.ethereum.org/2014/10/21/scalability-part-2-hypercubes/) [of](https://github.com/vbuterin/scalability_paper/blob/master/scalability.pdf) [research](https://cdn.hackaday.io/files/10879465447136/Mauve%20Paper%20Vitalik.pdf) into [proof](https://blog.ethereum.org/2014/01/15/slasher-a-punitive-proof-of-stake-algorithm/) [of](https://blog.ethereum.org/2014/11/25/proof-stake-learned-love-weak-subjectivity/) [stake](https://medium.com/@VitalikButerin/minimal-slashing-conditions-20f0b500fc6c) and [sharding](https://ethresear.ch/t/a-proposal-for-structuring-committees-cross-links-etc/2118). The eth2 protocol is a full redesign of the consensus-critical parts of the Ethereum system: a change of the consensus from proof of work to [proof of stake](https://eth.wiki/en/concepts/proof-of-stake-faqs) and the introduction of [sharding](https://eth.wiki/sharding/Sharding-FAQs) are the two most critical changes. As of the time of this writing, eth2 leaves the application-layer parts maximally untouched; that is, transactions and smart contracts continue to work the same way they did before, so applications do not have to change (except to compensate for a few gas cost changes) to be eth2 compatible. However, the engine that ensures that the network comes to consensus on the transactions is radically changed.
 
 ### What are proof of stake and sharding and why do they matter?
@@ -210,42 +226,91 @@ Now, let's get to the actual spec... (phase 0)
 
 We define the following Python custom types for type hinting and readability:
 
-| Name | SSZ equivalent | Description |
-| - | - | - |
-| `Slot` | `uint64` | a slot number |
-| `Epoch` | `uint64` | an epoch number (generally, epoch `i` consists of slots `EPOCH_LENGTH*i ... EPOCH_LENGTH*(i+1)-1`) |
-| `CommitteeIndex` | `uint64` | During every epoch, the validator set is randomly split up into `EPOCH_LENGTH` parts, one part for each slot in that epoch, but then within each slot that slot's validators are further divided into committees. In phase 0 this division does nothing, but in phase 1 these different committees get assigned to a different shard. `CommitteeIndex` is just the type of an integer, where that integer refers to the index of a committee within a slot (is it the first committee, the second, the third?) |
-| `ValidatorIndex` | `uint64` | Every validator is assigned a validator index upon depositing |
-| `Gwei` | `uint64` | An amount in Gwei |
-| `Root` | `Bytes32` | A Merkle root (typically of an SSZ object) |
-| `Version` | `Bytes4` | A fork version number (this is used to prevent messages on one eth2 network from accidentally being valid on another eth2 network, eg. mainnet vs testnet or mainnet vs ETC-like fork chain) |
-| `DomainType` | `Bytes4` | A domain type (different signed messages are given different domain tags to prevent messages signed for one function from accidentally being valid in another function) |
-| `ForkDigest` | `Bytes4` | A digest of the current fork data (used for replay protection) |
-| `Domain` | `Bytes32` | A signature domain (combines info from a domain type and a fork version, so we get replay protection along both dimensions) |
-| `BLSPubkey` | `Bytes48` | a BLS12-381 public key (see [here](https://ethresear.ch/t/pragmatic-signature-aggregation-with-bls/2105) for an explanation of the BLS signature scheme and its benefits) |
-| `BLSSignature` | `Bytes96` | a BLS12-381 signature |
+| Name             | SSZ equivalent | Description                       |
+| ---------------- | -------------- | --------------------------------- |
+| `Slot`           | `uint64`       | a slot number                     |
+| `Epoch`          | `uint64`       | an epoch number                   |
+| `CommitteeIndex` | `uint64`       | a committee index at a slot       |
+| `ValidatorIndex` | `uint64`       | a validator registry index        |
+| `Gwei`           | `uint64`       | an amount in Gwei                 |
+| `Root`           | `Bytes32`      | a Merkle root                     |
+| `Hash32`         | `Bytes32`      | a 256-bit hash                    |
+| `Version`        | `Bytes4`       | a fork version number             |
+| `DomainType`     | `Bytes4`       | a domain type                     |
+| `ForkDigest`     | `Bytes4`       | a digest of the current fork data |
+| `Domain`         | `Bytes32`      | a signature domain                |
+| `BLSPubkey`      | `Bytes48`      | a BLS12-381 public key            |
+| `BLSSignature`   | `Bytes96`      | a BLS12-381 signature             |
+
+<!-- NOTES-BEGIN -->
+
+| `CommitteeIndex` | `uint64` | 
+| - | - | 
+
+During every epoch, the validator set is randomly split up into `EPOCH_LENGTH` parts, one part for each slot in that epoch, but then within each slot that slot's validators are further divided into committees. In phase 0 this division does nothing, but in phase 1 these different committees get assigned to a different shard. `CommitteeIndex` is just the type of an integer, where that integer refers to the index of a committee within a slot (is it the first committee, the second, the third?) |
+
+| `ValidatorIndex` | `uint64` |
+| - | - | 
+
+Every validator is assigned a validator index upon depositing |
+
+| `Version` | `Bytes4` | 
+| - | - | 
+
+A fork version number (this is used to prevent messages on one eth2 network from accidentally being valid on another eth2 network, eg. mainnet vs testnet or mainnet vs ETC-like fork chain) |
+
+| `DomainType` | `Bytes4` | 
+| - | - | 
+
+A domain type (different signed messages are given different domain tags to prevent messages signed for one function from accidentally being valid in another function) |
+
+| `ForkDigest` | `Bytes4` | 
+| - | - | 
+
+A digest of the current fork data (used for replay protection) |
+
+| `Domain` | `Bytes32` | 
+| - | - | 
+
+A signature domain (combines info from a domain type and a fork version, so we get replay protection along both dimensions) |
+
+| `BLSPubkey` | `Bytes48` | 
+| - | - | 
+
+a BLS12-381 public key (see [here](https://ethresear.ch/t/pragmatic-signature-aggregation-with-bls/2105) for an explanation of the BLS signature scheme and its benefits) |
+
+| `BLSSignature` | `Bytes96` | 
+| - | - | 
 
 When you see a function like `def get_block_root_at_slot(state: BeaconState, slot: Slot) -> Root:` (a real example in the spec), interpret it as "this function takes as input the beacon chain state and an integer representing a slot number, and outputs a `Bytes32` which is a Merkle root". In this case, the Merkle root it outputs is the root hash of the block at the given slot (as you can tell from the name); but in general, paying attention to types will help make it easier for you to understand what's going on. In addition to being a debugging aid, the strong type system also functions as a type of comment.
 
 ## Constants
 
-The following values are (non-configurable) constants used throughout the specification. These constants are fairly boring; they're just added to the spec for readability.
-
-| Name | Value |
-| - | - |
-| `GENESIS_SLOT` | `Slot(0)` |
-| `GENESIS_EPOCH` | `Epoch(0)` |
-| `FAR_FUTURE_EPOCH` | `Epoch(2**64 - 1)` |
-| `BASE_REWARDS_PER_EPOCH` | `uint64(4)` |
-| `DEPOSIT_CONTRACT_TREE_DEPTH` | `uint64(2**5)` (= 32) |
-| `JUSTIFICATION_BITS_LENGTH` | `uint64(4)` |
-| `ENDIANNESS` | `'little'` |
+The following values are (non-configurable) constants used throughout the
+specification.
 
 ## Configuration
 
-Here, we have configurable constants, ie. if you adjust one of these up or down by 2x or even more, the network is likely not going to break. That said, a lot of thought went into setting these constants the way they are now, so it's worth understanding why each of these values is set as they are.
+*Note*: The default mainnet configuration values are included here for
+illustrative purposes. Defaults for this more dynamic type of configuration are
+available with the presets in the [`configs`](../../configs) directory. Testnets
+and other types of chain instances may use a different configuration.
 
 ### Misc
+
+| Name                          | Value                 |
+| ----------------------------- | --------------------- |
+| `UINT64_MAX`                  | `uint64(2**64 - 1)`   |
+| `UINT64_MAX_SQRT`             | `uint64(4294967295)`  |
+| `GENESIS_SLOT`                | `Slot(0)`             |
+| `GENESIS_EPOCH`               | `Epoch(0)`            |
+| `FAR_FUTURE_EPOCH`            | `Epoch(2**64 - 1)`    |
+| `BASE_REWARDS_PER_EPOCH`      | `uint64(4)`           |
+| `DEPOSIT_CONTRACT_TREE_DEPTH` | `uint64(2**5)` (= 32) |
+| `JUSTIFICATION_BITS_LENGTH`   | `uint64(4)`           |
+| `ENDIANNESS`                  | `'little'`            |
+
+<!-- NOTES-BEGIN -->
 
 | `ETH1_FOLLOW_DISTANCE` | `uint64(2**10)` (= 1,024) |
 | - | - |
@@ -339,6 +404,14 @@ Since the exact balance must change by at least a full 0.5 ETH to trigger an eff
 
 ### Gwei values
 
+| Name                          | Value                                   |
+| ----------------------------- | --------------------------------------- |
+| `MIN_DEPOSIT_AMOUNT`          | `Gwei(2**0 * 10**9)` (= 1,000,000,000)  |
+| `MAX_EFFECTIVE_BALANCE`       | `Gwei(2**5 * 10**9)` (= 32,000,000,000) |
+| `EFFECTIVE_BALANCE_INCREMENT` | `Gwei(2**0 * 10**9)` (= 1,000,000,000)  |
+
+<!-- NOTES-BEGIN -->
+
 | `MIN_DEPOSIT_AMOUNT` | `Gwei(2**0 * 10**9)` (= 1,000,000,000) |
 | - | - |
 
@@ -377,6 +450,18 @@ The BLS withdrawal prefix is effectively a "version number" for the withdrawal k
 
 ### Time parameters
 
+| Name                               | Value                     |  Unit  |   Duration   |
+| ---------------------------------- | ------------------------- | :----: | :----------: |
+| `MIN_ATTESTATION_INCLUSION_DELAY`  | `uint64(2**0)` (= 1)      | slots  |  12 seconds  |
+| `SLOTS_PER_EPOCH`                  | `uint64(2**5)` (= 32)     | slots  | 6.4 minutes  |
+| `MIN_SEED_LOOKAHEAD`               | `uint64(2**0)` (= 1)      | epochs | 6.4 minutes  |
+| `MAX_SEED_LOOKAHEAD`               | `uint64(2**2)` (= 4)      | epochs | 25.6 minutes |
+| `MIN_EPOCHS_TO_INACTIVITY_PENALTY` | `uint64(2**2)` (= 4)      | epochs | 25.6 minutes |
+| `EPOCHS_PER_ETH1_VOTING_PERIOD`    | `uint64(2**6)` (= 64)     | epochs |  ~6.8 hours  |
+| `SLOTS_PER_HISTORICAL_ROOT`        | `uint64(2**13)` (= 8,192) | slots  |  ~27 hours   |
+
+<!-- NOTES-BEGIN -->
+
 | `GENESIS_DELAY` | `uint64(172800)` | seconds | 2 days |
 | - | - | :-: | :-: |
 
@@ -388,7 +473,7 @@ When the deposit count becomes sufficient for the eth2 chain to start, the start
 A tradeoff between blockchain speed and risk. Note that in future phases, multiple steps will have to happen within a slot: beacon block -> shard block -> beacon block, as well as eventually a round of data availability sampling, so it is good to be conservative.
 
 ![](https://i.imgur.com/GrcYHKS.png)
-  
+
 Eth1 latency is generally ~1 second; 12 seconds gives a healthy safety margin on top of this.
 
 | `SECONDS_PER_ETH1_BLOCK` | `uint64(14)` | seconds | 14 seconds |
@@ -413,7 +498,7 @@ Going higher than 32 would needlessly make it take longer for a block to reach f
 
 <a id="seeds" />
 
-#### `[Aside: RANDAO, seeds and committee generation]`
+**`[Aside: RANDAO, seeds and committee generation]`**
 
 In any proof of stake system, we need to have some mechanism for determining who is the proposer of a block (as well as other roles that don't require all active validators to participate in simultaneously). In PoW, this happens automatically: everyone is trying to create a block, but on average only one person succeeds every (13 seconds in Ethereum | 600 seconds in Bitcoin), and you can't predict who will succeed ahead of time. In PoS, however, this random selection must be done explicitly.
 
@@ -470,6 +555,15 @@ In phase 1, this is how often the proposer committees on a shard get reshuffled.
 
 ### State list lengths
 
+| Name                           | Value                                 |       Unit       |   Duration    |
+| ------------------------------ | ------------------------------------- | :--------------: | :-----------: |
+| `EPOCHS_PER_HISTORICAL_VECTOR` | `uint64(2**16)` (= 65,536)            |      epochs      |  ~0.8 years   |
+| `EPOCHS_PER_SLASHINGS_VECTOR`  | `uint64(2**13)` (= 8,192)             |      epochs      |   ~36 days    |
+| `HISTORICAL_ROOTS_LIMIT`       | `uint64(2**24)` (= 16,777,216)        | historical roots | ~52,262 years |
+| `VALIDATOR_REGISTRY_LIMIT`     | `uint64(2**40)` (= 1,099,511,627,776) |    validators    |               |
+
+<!-- NOTES-BEGIN -->
+
 | `EPOCHS_PER_HISTORICAL_VECTOR` | `uint64(2**16)` (= 65,536) | epochs | ~0.8 years |
 | - | - | :-: | :-: |
 
@@ -490,7 +584,34 @@ All lists in SSZ have to have _some_ limit; 52,262 years is reasonably close to 
 
 ### Rewards and penalties
 
-| `BASE_REWARD_FACTOR` | `uint64(2**6)` (= 64) |
+| Name                               | Value                          |
+| ---------------------------------- | ------------------------------ |
+| `BASE_REWARD_FACTOR`               | `uint64(2**6)` (= 64)          |
+| `WHISTLEBLOWER_REWARD_QUOTIENT`    | `uint64(2**9)` (= 512)         |
+| `PROPOSER_REWARD_QUOTIENT`         | `uint64(2**3)` (= 8)           |
+| `INACTIVITY_PENALTY_QUOTIENT`      | `uint64(2**26)` (= 67,108,864) |
+| `MIN_SLASHING_PENALTY_QUOTIENT`    | `uint64(2**7)` (= 128)         |
+| `PROPORTIONAL_SLASHING_MULTIPLIER` | `uint64(1)`                    |
+
+- The `INACTIVITY_PENALTY_QUOTIENT` equals `INVERSE_SQRT_E_DROP_TIME**2` where
+  `INVERSE_SQRT_E_DROP_TIME := 2**13` epochs (about 36 days) is the time it
+  takes the inactivity penalty to reduce the balance of non-participating
+  validators to about `1/sqrt(e) ~= 60.6%`. Indeed, the balance retained by
+  offline validators after `n` epochs is about
+  `(1 - 1/INACTIVITY_PENALTY_QUOTIENT)**(n**2/2)`; so after
+  `INVERSE_SQRT_E_DROP_TIME` epochs, it is roughly
+  `(1 - 1/INACTIVITY_PENALTY_QUOTIENT)**(INACTIVITY_PENALTY_QUOTIENT/2) ~= 1/sqrt(e)`.
+  Note this value will be upgraded to `2**24` after Phase 0 mainnet stabilizes
+  to provide a faster recovery in the event of an inactivity leak.
+
+- The `PROPORTIONAL_SLASHING_MULTIPLIER` is set to `1` at initial mainnet
+  launch, resulting in one-third of the minimum accountable safety margin in the
+  event of a finality attack. After Phase 0 mainnet stabilizes, this value will
+  be upgraded to `3` to provide the maximal minimum accountable safety margin.
+
+<!-- NOTES-BEGIN -->
+
+`BASE_REWARD_FACTOR` | `uint64(2**6)` (= 64) |
 | - | - |
 
 See `get_base_reward` in the section on [helpers](#helpers) for details.
@@ -535,20 +656,18 @@ You lose at least 1/32 of your deposit if you get slashed (getting slashed has t
 
 ### Max operations per block
 
-| Name | Value |
-| - | - |
-| `MAX_PROPOSER_SLASHINGS` | `2**4` (= 16) |
-| `MAX_ATTESTER_SLASHINGS` | `2**1` (= 2) |
-| `MAX_ATTESTATIONS` | `2**7` (= 128) |
-| `MAX_DEPOSITS` | `2**4` (= 16) |
-| `MAX_VOLUNTARY_EXITS` | `2**4` (= 16) |
-
-These operations are set based on calculations of how many can be safely processed, though there is the additional constraint that `MAX_ATTESTATIONS` must equal the max number of committees (64) plus a safety margin to account for missed proposals or delayed or disagreeing attestations.
+| Name                     | Value          |
+| ------------------------ | -------------- |
+| `MAX_PROPOSER_SLASHINGS` | `2**4` (= 16)  |
+| `MAX_ATTESTER_SLASHINGS` | `2**1` (= 2)   |
+| `MAX_ATTESTATIONS`       | `2**7` (= 128) |
+| `MAX_DEPOSITS`           | `2**4` (= 16)  |
+| `MAX_VOLUNTARY_EXITS`    | `2**4` (= 16)  |
 
 ### Domain types
 
-| Name | Value |
-| - | - |
+| Name                         | Value                      |
+| ---------------------------- | -------------------------- |
 | `DOMAIN_BEACON_PROPOSER`     | `DomainType('0x00000000')` |
 | `DOMAIN_BEACON_ATTESTER`     | `DomainType('0x01000000')` |
 | `DOMAIN_RANDAO`              | `DomainType('0x02000000')` |
@@ -556,10 +675,27 @@ These operations are set based on calculations of how many can be safely process
 | `DOMAIN_VOLUNTARY_EXIT`      | `DomainType('0x04000000')` |
 | `DOMAIN_SELECTION_PROOF`     | `DomainType('0x05000000')` |
 | `DOMAIN_AGGREGATE_AND_PROOF` | `DomainType('0x06000000')` |
+| `DOMAIN_APPLICATION_MASK`    | `DomainType('0x00000001')` |
+
+*Note*: `DOMAIN_APPLICATION_MASK` reserves the rest of the bitspace in
+`DomainType` for application usage. This means for some `DomainType`
+`DOMAIN_SOME_APPLICATION`, `DOMAIN_SOME_APPLICATION & DOMAIN_APPLICATION_MASK`
+**MUST** be non-zero. This expression for any other `DomainType` in the
+consensus specs **MUST** be zero.
+
+<!-- NOTES-BEGIN -->
 
 These values are mixed into the messages of each type when those messages are being signed; this prevents messages signed for one purpose from being accidentally valid in another context.
 
 ## Containers
+
+The following types are [SimpleSerialize (SSZ)](../../ssz/simple-serialize.md)
+containers.
+
+*Note*: The definitions are ordered topologically to facilitate execution of the
+spec.
+
+*Note*: Fields missing in container instantiations default to their zero value.
 
 <!-- NOTES-BEGIN -->
 
@@ -577,7 +713,7 @@ The following types are [SimpleSerialize (SSZ)](../../ssz/simple-serialize.md) c
 class Fork(Container):
     previous_version: Version
     current_version: Version
-    epoch: Epoch  # Epoch of latest fork
+    epoch: Epoch
 ```
 
 <!-- NOTES-BEGIN -->
@@ -625,14 +761,13 @@ We simplify this by creating a container wrapper to represent the epoch and the 
 ```python
 class Validator(Container):
     pubkey: BLSPubkey
-    withdrawal_credentials: Bytes32  # Commitment to pubkey for withdrawals
-    effective_balance: Gwei  # Balance at stake
+    withdrawal_credentials: Bytes32
+    effective_balance: Gwei
     slashed: boolean
-    # Status epochs
-    activation_eligibility_epoch: Epoch  # When criteria for activation were met
+    activation_eligibility_epoch: Epoch
     activation_epoch: Epoch
     exit_epoch: Epoch
-    withdrawable_epoch: Epoch  # When validator can withdraw funds
+    withdrawable_epoch: Epoch
 ```
 
 <!-- NOTES-BEGIN -->
@@ -658,9 +793,7 @@ Additionally, storing epochs for each phase transition simplifies the protocol. 
 class AttestationData(Container):
     slot: Slot
     index: CommitteeIndex
-    # LMD GHOST vote
     beacon_block_root: Root
-    # FFG vote
     source: Checkpoint
     target: Checkpoint
 ```
@@ -702,7 +835,7 @@ For efficiency reasons we do not process the full effects of attestations includ
 class Eth1Data(Container):
     deposit_root: Root
     deposit_count: uint64
-    block_hash: Bytes32
+    block_hash: Hash32
 ```
 
 <!-- NOTES-BEGIN -->
@@ -749,12 +882,14 @@ This is the data that the `signature` in the `DepositData` is signing over. The 
   
 #### `DepositData`
 
+*Note*: `signature` is over `DepositMessage`.
+
 ```python
 class DepositData(Container):
     pubkey: BLSPubkey
     withdrawal_credentials: Bytes32
     amount: Gwei
-    signature: BLSSignature  # Signing over DepositMessage
+    signature: BLSSignature
 ```
 
 <!-- NOTES-BEGIN -->
@@ -847,9 +982,11 @@ A record specifying that part of some committee (using a bitfield to identify wh
 
 #### `Deposit`
 
+*Note*: `proof` is the Merkle path to the deposit root.
+
 ```python
 class Deposit(Container):
-    proof: Vector[Bytes32, DEPOSIT_CONTRACT_TREE_DEPTH + 1]  # Merkle path to deposit root
+    proof: Vector[Bytes32, DEPOSIT_CONTRACT_TREE_DEPTH + 1]
     data: DepositData
 ```
 
@@ -861,7 +998,7 @@ Proof that a validator deposited. These get processed sequentially in order of i
 
 ```python
 class VoluntaryExit(Container):
-    epoch: Epoch  # Earliest epoch when voluntary exit can be processed
+    epoch: Epoch
     validator_index: ValidatorIndex
 ```
 
@@ -876,9 +1013,8 @@ When a validator wishes to exit voluntarily, they may create and sign and broadc
 ```python
 class BeaconBlockBody(Container):
     randao_reveal: BLSSignature
-    eth1_data: Eth1Data  # Eth1 data vote
-    graffiti: Bytes32  # Arbitrary data
-    # Operations
+    eth1_data: Eth1Data
+    graffiti: Bytes32
     proposer_slashings: List[ProposerSlashing, MAX_PROPOSER_SLASHINGS]
     attester_slashings: List[AttesterSlashing, MAX_ATTESTER_SLASHINGS]
     attestations: List[Attestation, MAX_ATTESTATIONS]
@@ -911,33 +1047,25 @@ A full beacon block; basically a beacon block header but with the body root repl
 
 ```python
 class BeaconState(Container):
-    # Versioning
     genesis_time: uint64
     genesis_validators_root: Root
     slot: Slot
     fork: Fork
-    # History
     latest_block_header: BeaconBlockHeader
     block_roots: Vector[Root, SLOTS_PER_HISTORICAL_ROOT]
     state_roots: Vector[Root, SLOTS_PER_HISTORICAL_ROOT]
     historical_roots: List[Root, HISTORICAL_ROOTS_LIMIT]
-    # Eth1
     eth1_data: Eth1Data
     eth1_data_votes: List[Eth1Data, EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH]
     eth1_deposit_index: uint64
-    # Registry
     validators: List[Validator, VALIDATOR_REGISTRY_LIMIT]
     balances: List[Gwei, VALIDATOR_REGISTRY_LIMIT]
-    # Randomness
     randao_mixes: Vector[Bytes32, EPOCHS_PER_HISTORICAL_VECTOR]
-    # Slashings
-    slashings: Vector[Gwei, EPOCHS_PER_SLASHINGS_VECTOR]  # Per-epoch sums of slashed effective balances
-    # Attestations
+    slashings: Vector[Gwei, EPOCHS_PER_SLASHINGS_VECTOR]
     previous_epoch_attestations: List[PendingAttestation, MAX_ATTESTATIONS * SLOTS_PER_EPOCH]
     current_epoch_attestations: List[PendingAttestation, MAX_ATTESTATIONS * SLOTS_PER_EPOCH]
-    # Finality
-    justification_bits: Bitvector[JUSTIFICATION_BITS_LENGTH]  # Bit set for every recent justified epoch
-    previous_justified_checkpoint: Checkpoint  # Previous epoch snapshot
+    justification_bits: Bitvector[JUSTIFICATION_BITS_LENGTH]
+    previous_justified_checkpoint: Checkpoint
     current_justified_checkpoint: Checkpoint
     finalized_checkpoint: Checkpoint
 ```
@@ -986,6 +1114,9 @@ class SignedBeaconBlockHeader(Container):
 
 ## Helper functions
 
+*Note*: The definitions below are for specification purposes and are not
+necessarily optimal implementations.
+
 <!-- NOTES-BEGIN -->
 
 This first set of functions is made up of relatively simple "helper" functions that are then used in the rest of the spec.
@@ -1001,6 +1132,8 @@ def integer_squareroot(n: uint64) -> uint64:
     """
     Return the largest integer ``x`` such that ``x**2 <= n``.
     """
+    if n == UINT64_MAX:
+        return UINT64_MAX_SQRT
     x = n
     y = (x + 1) // 2
     while y < x:
@@ -1029,7 +1162,9 @@ Does a bit-by-bit [XOR](https://en.wikipedia.org/wiki/Exclusive_or) on the input
 
 #### `uint_to_bytes`
 
-`def uint_to_bytes(n: uint) -> bytes` is a function for serializing the `uint` type object to bytes in ``ENDIANNESS``-endian. The expected length of the output is the byte-length of the `uint` type.
+`def uint_to_bytes(n: uint) -> bytes` is a function for serializing the `uint`
+type object to bytes in `ENDIANNESS`-endian. The expected length of the output
+is the byte-length of the `uint` type.
 
 #### `bytes_to_uint64`
 
@@ -1053,17 +1188,29 @@ Converts 8 bytes into a 64-bit integer.
 
 #### `hash_tree_root`
 
-`def hash_tree_root(object: SSZSerializable) -> Root` is a function for hashing objects into a single root by utilizing a hash tree structure, as defined in the [SSZ spec](../../ssz/simple-serialize.md#merkleization).
+`def hash_tree_root(object: SSZSerializable) -> Root` is a function for hashing
+objects into a single root by utilizing a hash tree structure, as defined in the
+[SSZ spec](../../ssz/simple-serialize.md#merkleization).
 
 #### BLS Signatures
 
-Eth2 makes use of BLS signatures as specified in the [IETF draft BLS specification draft-irtf-cfrg-bls-signature-02](https://tools.ietf.org/html/draft-irtf-cfrg-bls-signature-02) but uses [Hashing to Elliptic Curves - draft-irtf-cfrg-hash-to-curve-07](https://tools.ietf.org/html/draft-irtf-cfrg-hash-to-curve-07) instead of draft-irtf-cfrg-hash-to-curve-06. Specifically, eth2 uses the `BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_` ciphersuite which implements the following interfaces:
+The
+[IETF BLS signature draft standard v4](https://tools.ietf.org/html/draft-irtf-cfrg-bls-signature-04)
+with ciphersuite `BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_` defines the
+following functions:
 
-- `def Sign(SK: int, message: Bytes) -> BLSSignature`
-- `def Verify(PK: BLSPubkey, message: Bytes, signature: BLSSignature) -> bool`
+- `def Sign(privkey: int, message: Bytes) -> BLSSignature`
+- `def Verify(pubkey: BLSPubkey, message: Bytes, signature: BLSSignature) -> bool`
 - `def Aggregate(signatures: Sequence[BLSSignature]) -> BLSSignature`
-- `def FastAggregateVerify(PKs: Sequence[BLSPubkey], message: Bytes, signature: BLSSignature) -> bool`
-- `def AggregateVerify(PKs: Sequence[BLSPubkey], messages: Sequence[Bytes], signature: BLSSignature) -> bool`
+- `def FastAggregateVerify(pubkeys: Sequence[BLSPubkey], message: Bytes, signature: BLSSignature) -> bool`
+- `def AggregateVerify(pubkeys: Sequence[BLSPubkey], messages: Sequence[Bytes], signature: BLSSignature) -> bool`
+- `def KeyValidate(pubkey: BLSPubkey) -> bool`
+
+The above functions are accessed through the `bls` module, e.g. `bls.Verify`.
+
+<!-- NOTES-BEGIN -->
+
+Eth2 makes use of BLS signatures as specified in the [IETF draft BLS specification draft-irtf-cfrg-bls-signature-02](https://tools.ietf.org/html/draft-irtf-cfrg-bls-signature-02) but uses [Hashing to Elliptic Curves - draft-irtf-cfrg-hash-to-curve-07](https://tools.ietf.org/html/draft-irtf-cfrg-hash-to-curve-07) instead of draft-irtf-cfrg-hash-to-curve-06. Specifically, eth2 uses the `BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_` ciphersuite which implements the previous interfaces.
 
 Within these specifications, BLS signatures are treated as a module for notational clarity, thus to verify a signature `bls.Verify(...)` is used.
 
@@ -1072,8 +1219,6 @@ Within these specifications, BLS signatures are treated as a module for notation
 BLS is used [because of its aggregation-friendliness](https://ethresear.ch/t/pragmatic-signature-aggregation-with-bls/2105): many BLS signatures can be aggregated into a single signature, and if the signatures are of the same message this aggregation is extremely fast to do and the aggregate signatures are extremely cheap to verify (one elliptic curve addition (!!) per participant, plus one pairing to verify the signature no matter how many participants there are). This is the key magic that allows eth2 to support very high numbers of validators.
 
 ### Predicates
-
-<a id="lifecycle" />
 
 #### `[Aside: note on a validator's life cycle]`
 
@@ -1163,7 +1308,9 @@ def is_slashable_validator(validator: Validator, epoch: Epoch) -> bool:
     """
     Check if ``validator`` is slashable.
     """
-    return (not validator.slashed) and (validator.activation_epoch <= epoch < validator.withdrawable_epoch)
+    return (not validator.slashed) and (
+        validator.activation_epoch <= epoch < validator.withdrawable_epoch
+    )
 ```
 
 #### `is_slashable_attestation_data`
@@ -1175,7 +1322,8 @@ def is_slashable_attestation_data(data_1: AttestationData, data_2: AttestationDa
     """
     return (
         # Double vote
-        (data_1 != data_2 and data_1.target.epoch == data_2.target.epoch) or
+        (data_1 != data_2 and data_1.target.epoch == data_2.target.epoch)
+        or
         # Surround vote
         (data_1.source.epoch < data_2.source.epoch and data_2.target.epoch < data_1.target.epoch)
     )
@@ -1188,7 +1336,9 @@ This function determines if the two `AttestationData` objects conflict with each
 #### `is_valid_indexed_attestation`
 
 ```python
-def is_valid_indexed_attestation(state: BeaconState, indexed_attestation: IndexedAttestation) -> bool:
+def is_valid_indexed_attestation(
+    state: BeaconState, indexed_attestation: IndexedAttestation
+) -> bool:
     """
     Check if ``indexed_attestation`` is not empty, has sorted and unique indices and has a valid aggregate signature.
     """
@@ -1210,7 +1360,9 @@ Verifies the validity of an attestation (mainly extracting the pubkeys of the si
 #### `is_valid_merkle_branch`
 
 ```python
-def is_valid_merkle_branch(leaf: Bytes32, branch: Sequence[Bytes32], depth: uint64, index: uint64, root: Root) -> bool:
+def is_valid_merkle_branch(
+    leaf: Bytes32, branch: Sequence[Bytes32], depth: uint64, index: uint64, root: Root
+) -> bool:
     """
     Check if ``leaf`` at ``index`` verifies against the Merkle ``root`` and ``branch``.
     """
@@ -1229,6 +1381,24 @@ A generic Merkle branch validity checker.
 
 ### Misc
 
+| Name                             | Value                     |
+| -------------------------------- | ------------------------- |
+| `MAX_COMMITTEES_PER_SLOT`        | `uint64(2**6)` (= 64)     |
+| `TARGET_COMMITTEE_SIZE`          | `uint64(2**7)` (= 128)    |
+| `MAX_VALIDATORS_PER_COMMITTEE`   | `uint64(2**11)` (= 2,048) |
+| `SHUFFLE_ROUND_COUNT`            | `uint64(90)`              |
+| `HYSTERESIS_QUOTIENT`            | `uint64(4)`               |
+| `HYSTERESIS_DOWNWARD_MULTIPLIER` | `uint64(1)`               |
+| `HYSTERESIS_UPWARD_MULTIPLIER`   | `uint64(5)`               |
+
+- For the safety of committees, `TARGET_COMMITTEE_SIZE` exceeds
+  [the recommended minimum committee size of 111](http://web.archive.org/web/20190504131341/https://vitalik.ca/files/Ithaca201807_Sharding.pdf);
+  with sufficient active validators (at least
+  `SLOTS_PER_EPOCH * TARGET_COMMITTEE_SIZE`), the shuffling algorithm ensures
+  committee sizes of at least `TARGET_COMMITTEE_SIZE`. (Unbiasable randomness
+  with a Verifiable Delay Function (VDF) will improve committee robustness and
+  lower the safe minimum committee size.)
+
 #### `compute_shuffled_index`
 
 ```python
@@ -1245,9 +1415,7 @@ def compute_shuffled_index(index: uint64, index_count: uint64, seed: Bytes32) ->
         flip = (pivot + index_count - index) % index_count
         position = max(index, flip)
         source = hash(
-            seed
-            + uint_to_bytes(uint8(current_round))
-            + uint_to_bytes(uint32(position // 256))
+            seed + uint_to_bytes(uint8(current_round)) + uint_to_bytes(uint32(position // 256))
         )
         byte = uint8(source[(position % 256) // 8])
         bit = (byte >> (position % 8)) % 2
@@ -1284,7 +1452,9 @@ It can be efficiently run forwards or backward (you don't have to generate all `
 #### `compute_proposer_index`
 
 ```python
-def compute_proposer_index(state: BeaconState, indices: Sequence[ValidatorIndex], seed: Bytes32) -> ValidatorIndex:
+def compute_proposer_index(
+    state: BeaconState, indices: Sequence[ValidatorIndex], seed: Bytes32
+) -> ValidatorIndex:
     """
     Return from ``indices`` a random index sampled by effective balance.
     """
@@ -1308,16 +1478,18 @@ Computes the proposer index. This function is somewhat involved; the idea is tha
 #### `compute_committee`
 
 ```python
-def compute_committee(indices: Sequence[ValidatorIndex],
-                      seed: Bytes32,
-                      index: uint64,
-                      count: uint64) -> Sequence[ValidatorIndex]:
+def compute_committee(
+    indices: Sequence[ValidatorIndex], seed: Bytes32, index: uint64, count: uint64
+) -> Sequence[ValidatorIndex]:
     """
     Return the committee corresponding to ``indices``, ``seed``, ``index``, and committee ``count``.
     """
     start = (len(indices) * index) // count
-    end = (len(indices) * (index + 1)) // count
-    return [indices[compute_shuffled_index(uint64(i), uint64(len(indices)), seed)] for i in range(start, end)]
+    end = (len(indices) * uint64(index + 1)) // count
+    return [
+        indices[compute_shuffled_index(uint64(i), uint64(len(indices)), seed)]
+        for i in range(start, end)
+    ]
 ```
 
 <!-- NOTES-BEGIN -->
@@ -1366,10 +1538,12 @@ def compute_fork_data_root(current_version: Version, genesis_validators_root: Ro
     Return the 32-byte fork data root for the ``current_version`` and ``genesis_validators_root``.
     This is used primarily in signature domains to avoid collisions across forks/chains.
     """
-    return hash_tree_root(ForkData(
-        current_version=current_version,
-        genesis_validators_root=genesis_validators_root,
-    ))
+    return hash_tree_root(
+        ForkData(
+            current_version=current_version,
+            genesis_validators_root=genesis_validators_root,
+        )
+    )
 ```
 
 <!-- NOTES-BEGIN -->
@@ -1395,7 +1569,9 @@ The first four bytes of the fork digest are used on the p2p layer to separate va
 #### `compute_domain`
 
 ```python
-def compute_domain(domain_type: DomainType, fork_version: Version=None, genesis_validators_root: Root=None) -> Domain:
+def compute_domain(
+    domain_type: DomainType, fork_version: Version = None, genesis_validators_root: Root = None
+) -> Domain:
     """
     Return the domain for the ``domain_type`` and ``fork_version``.
     """
@@ -1420,10 +1596,12 @@ def compute_signing_root(ssz_object: SSZObject, domain: Domain) -> Root:
     """
     Return the signing root for the corresponding signing data.
     """
-    return hash_tree_root(SigningData(
-        object_root=hash_tree_root(ssz_object),
-        domain=domain,
-    ))
+    return hash_tree_root(
+        SigningData(
+            object_root=hash_tree_root(ssz_object),
+            domain=domain,
+        )
+    )
 ```
 
 <!-- NOTES-BEGIN -->
@@ -1431,6 +1609,8 @@ def compute_signing_root(ssz_object: SSZObject, domain: Domain) -> Root:
 Computes the hash that is being signed when an SSZ container is being signed. This is done by creating an ephemeral SSZ container that puts the original container and the domain together, and outputting the root of that.
 
 ### Beacon state accessors
+
+<!-- NOTES-BEGIN -->
 
 This set of functions accesses the beacon chain state.
 
@@ -1497,7 +1677,9 @@ def get_active_validator_indices(state: BeaconState, epoch: Epoch) -> Sequence[V
     """
     Return the sequence of active validator indices at ``epoch``.
     """
-    return [ValidatorIndex(i) for i, v in enumerate(state.validators) if is_active_validator(v, epoch)]
+    return [
+        ValidatorIndex(i) for i, v in enumerate(state.validators) if is_active_validator(v, epoch)
+    ]
 ```
 
 <!-- NOTES-BEGIN -->
@@ -1512,7 +1694,9 @@ def get_validator_churn_limit(state: BeaconState) -> uint64:
     Return the validator churn limit for the current epoch.
     """
     active_validator_indices = get_active_validator_indices(state, get_current_epoch(state))
-    return max(MIN_PER_EPOCH_CHURN_LIMIT, uint64(len(active_validator_indices)) // CHURN_LIMIT_QUOTIENT)
+    return max(
+        MIN_PER_EPOCH_CHURN_LIMIT, uint64(len(active_validator_indices)) // CHURN_LIMIT_QUOTIENT
+    )
 ```
 
 <!-- NOTES-BEGIN -->
@@ -1526,7 +1710,9 @@ def get_seed(state: BeaconState, epoch: Epoch, domain_type: DomainType) -> Bytes
     """
     Return the seed at ``epoch``.
     """
-    mix = get_randao_mix(state, Epoch(epoch + EPOCHS_PER_HISTORICAL_VECTOR - MIN_SEED_LOOKAHEAD - 1))  # Avoid underflow
+    mix = get_randao_mix(
+        state, Epoch(epoch + EPOCHS_PER_HISTORICAL_VECTOR - MIN_SEED_LOOKAHEAD - 1)
+    )  # Avoid underflow
     return hash(domain_type + uint_to_bytes(epoch) + mix)
 ```
 
@@ -1547,10 +1733,15 @@ def get_committee_count_per_slot(state: BeaconState, epoch: Epoch) -> uint64:
     """
     Return the number of committees in each slot for the given ``epoch``.
     """
-    return max(uint64(1), min(
-        MAX_COMMITTEES_PER_SLOT,
-        uint64(len(get_active_validator_indices(state, epoch))) // SLOTS_PER_EPOCH // TARGET_COMMITTEE_SIZE,
-    ))
+    return max(
+        uint64(1),
+        min(
+            MAX_COMMITTEES_PER_SLOT,
+            uint64(len(get_active_validator_indices(state, epoch)))
+            // SLOTS_PER_EPOCH
+            // TARGET_COMMITTEE_SIZE,
+        ),
+    )
 ```
 
 <!-- NOTES-BEGIN -->
@@ -1564,7 +1755,9 @@ If there are not enough validators for even a single full committee (that is, le
 #### `get_beacon_committee`
 
 ```python
-def get_beacon_committee(state: BeaconState, slot: Slot, index: CommitteeIndex) -> Sequence[ValidatorIndex]:
+def get_beacon_committee(
+    state: BeaconState, slot: Slot, index: CommitteeIndex
+) -> Sequence[ValidatorIndex]:
     """
     Return the beacon committee at ``slot`` for ``index``.
     """
@@ -1606,9 +1799,14 @@ def get_total_balance(state: BeaconState, indices: Set[ValidatorIndex]) -> Gwei:
     """
     Return the combined effective balance of the ``indices``.
     ``EFFECTIVE_BALANCE_INCREMENT`` Gwei minimum to avoid divisions by zero.
-    Math safe up to ~10B ETH, afterwhich this overflows uint64.
+    Math safe up to ~10B ETH, after which this overflows uint64.
     """
-    return Gwei(max(EFFECTIVE_BALANCE_INCREMENT, sum([state.validators[index].effective_balance for index in indices])))
+    return Gwei(
+        max(
+            EFFECTIVE_BALANCE_INCREMENT,
+            sum([state.validators[index].effective_balance for index in indices]),
+        )
+    )
 ```
 
 <!-- NOTES-BEGIN -->
@@ -1623,18 +1821,22 @@ def get_total_active_balance(state: BeaconState) -> Gwei:
     Return the combined effective balance of the active validators.
     Note: ``get_total_balance`` returns ``EFFECTIVE_BALANCE_INCREMENT`` Gwei minimum to avoid divisions by zero.
     """
-    return get_total_balance(state, set(get_active_validator_indices(state, get_current_epoch(state))))
+    return get_total_balance(
+        state, set(get_active_validator_indices(state, get_current_epoch(state)))
+    )
 ```
 
 #### `get_domain`
 
 ```python
-def get_domain(state: BeaconState, domain_type: DomainType, epoch: Epoch=None) -> Domain:
+def get_domain(state: BeaconState, domain_type: DomainType, epoch: Epoch = None) -> Domain:
     """
     Return the signature domain (fork version concatenated with domain type) of a message.
     """
     epoch = get_current_epoch(state) if epoch is None else epoch
-    fork_version = state.fork.previous_version if epoch < state.fork.epoch else state.fork.current_version
+    fork_version = (
+        state.fork.previous_version if epoch < state.fork.epoch else state.fork.current_version
+    )
     return compute_domain(domain_type, fork_version, state.genesis_validators_root)
 ```
 
@@ -1649,7 +1851,7 @@ def get_indexed_attestation(state: BeaconState, attestation: Attestation) -> Ind
     """
     Return the indexed attestation corresponding to ``attestation``.
     """
-    attesting_indices = get_attesting_indices(state, attestation.data, attestation.aggregation_bits)
+    attesting_indices = get_attesting_indices(state, attestation)
 
     return IndexedAttestation(
         attesting_indices=sorted(attesting_indices),
@@ -1667,14 +1869,12 @@ We have logic to convert from one type of attestation to the other so that the m
 #### `get_attesting_indices`
 
 ```python
-def get_attesting_indices(state: BeaconState,
-                          data: AttestationData,
-                          bits: Bitlist[MAX_VALIDATORS_PER_COMMITTEE]) -> Set[ValidatorIndex]:
+def get_attesting_indices(state: BeaconState, attestation: Attestation) -> Set[ValidatorIndex]:
     """
     Return the set of attesting indices corresponding to ``data`` and ``bits``.
     """
-    committee = get_beacon_committee(state, data.slot, data.index)
-    return set(index for i, index in enumerate(committee) if bits[i])
+    committee = get_beacon_committee(state, attestation.data.slot, attestation.data.index)
+    return set(index for i, index in enumerate(committee) if attestation.aggregation_bits[i])
 ```
 
 <!-- NOTES-BEGIN -->
@@ -1740,9 +1940,9 @@ The code here enforces both (i) the "minimum 4 epoch delay rule" and (ii) the ex
 #### `slash_validator`
 
 ```python
-def slash_validator(state: BeaconState,
-                    slashed_index: ValidatorIndex,
-                    whistleblower_index: ValidatorIndex=None) -> None:
+def slash_validator(
+    state: BeaconState, slashed_index: ValidatorIndex, whistleblower_index: ValidatorIndex = None
+) -> None:
     """
     Slash the validator with index ``slashed_index``.
     """
@@ -1750,9 +1950,13 @@ def slash_validator(state: BeaconState,
     initiate_validator_exit(state, slashed_index)
     validator = state.validators[slashed_index]
     validator.slashed = True
-    validator.withdrawable_epoch = max(validator.withdrawable_epoch, Epoch(epoch + EPOCHS_PER_SLASHINGS_VECTOR))
+    validator.withdrawable_epoch = max(
+        validator.withdrawable_epoch, Epoch(epoch + EPOCHS_PER_SLASHINGS_VECTOR)
+    )
     state.slashings[epoch % EPOCHS_PER_SLASHINGS_VECTOR] += validator.effective_balance
-    decrease_balance(state, slashed_index, validator.effective_balance // MIN_SLASHING_PENALTY_QUOTIENT)
+    decrease_balance(
+        state, slashed_index, validator.effective_balance // MIN_SLASHING_PENALTY_QUOTIENT
+    )
 
     # Apply proposer and whistleblower rewards
     proposer_index = get_beacon_proposer_index(state)
@@ -1777,6 +1981,68 @@ Slashes a validator (ie. forcibly exits and penalizes the validator if they did 
 * Rewards the block proposer for including the slashing
 
 ## Genesis
+
+Before the Ethereum beacon chain genesis has been triggered, and for every
+Ethereum proof-of-work block, let
+`candidate_state = initialize_beacon_state_from_eth1(eth1_block_hash, eth1_timestamp, deposits)`
+where:
+
+- `eth1_block_hash` is the hash of the Ethereum proof-of-work block
+- `eth1_timestamp` is the Unix timestamp corresponding to `eth1_block_hash`
+- `deposits` is the sequence of all deposits, ordered chronologically, up to
+  (and including) the block with hash `eth1_block_hash`
+
+Proof-of-work blocks must only be considered once they are at least
+`SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE` seconds old (i.e.
+`eth1_timestamp + SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE <= current_unix_time`).
+Due to this constraint, if
+`GENESIS_DELAY < SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE`, then the
+`genesis_time` can happen before the time/state is first known. Values should be
+configured to avoid this case.
+
+```python
+def initialize_beacon_state_from_eth1(
+    eth1_block_hash: Hash32, eth1_timestamp: uint64, deposits: Sequence[Deposit]
+) -> BeaconState:
+    fork = Fork(
+        previous_version=GENESIS_FORK_VERSION,
+        current_version=GENESIS_FORK_VERSION,
+        epoch=GENESIS_EPOCH,
+    )
+    state = BeaconState(
+        genesis_time=eth1_timestamp + GENESIS_DELAY,
+        fork=fork,
+        eth1_data=Eth1Data(block_hash=eth1_block_hash, deposit_count=uint64(len(deposits))),
+        latest_block_header=BeaconBlockHeader(body_root=hash_tree_root(BeaconBlockBody())),
+        randao_mixes=[eth1_block_hash]
+        * EPOCHS_PER_HISTORICAL_VECTOR,  # Seed RANDAO with Eth1 entropy
+    )
+
+    # Process deposits
+    leaves = list(map(lambda deposit: deposit.data, deposits))
+    for index, deposit in enumerate(deposits):
+        deposit_data_list = List[DepositData, 2**DEPOSIT_CONTRACT_TREE_DEPTH](*leaves[: index + 1])
+        state.eth1_data.deposit_root = hash_tree_root(deposit_data_list)
+        process_deposit(state, deposit)
+
+    # Process activations
+    for index, validator in enumerate(state.validators):
+        balance = state.balances[index]
+        validator.effective_balance = min(
+            balance - balance % EFFECTIVE_BALANCE_INCREMENT, MAX_EFFECTIVE_BALANCE
+        )
+        if validator.effective_balance == MAX_EFFECTIVE_BALANCE:
+            validator.activation_eligibility_epoch = GENESIS_EPOCH
+            validator.activation_epoch = GENESIS_EPOCH
+
+    # Set genesis validators root for domain separation and chain versioning
+    state.genesis_validators_root = hash_tree_root(state.validators)
+
+    return state
+```
+
+*Note*: The ETH1 block with `eth1_timestamp` meeting the minimum genesis active
+validator count criteria can also occur before `MIN_GENESIS_TIME`.
 
 <!-- NOTES-BEGIN -->
 
@@ -1838,7 +2104,8 @@ def initialize_beacon_state_from_eth1(eth1_block_hash: Bytes32,
 
 ### Genesis state
 
-Let `genesis_state = candidate_state` whenever `is_valid_genesis_state(candidate_state) is True` for the first time.
+Let `genesis_state = candidate_state` whenever
+`is_valid_genesis_state(candidate_state) is True` for the first time.
 
 ```python
 def is_valid_genesis_state(state: BeaconState) -> bool:
@@ -1861,6 +2128,62 @@ The idea here is that you can think of a client as repeatedly attempting to crea
 Let `genesis_block = BeaconBlock(state_root=hash_tree_root(genesis_state))`.
 
 ## Beacon chain state transition function
+
+The post-state corresponding to a pre-state `state` and a signed block
+`signed_block` is defined as `state_transition(state, signed_block)`. State
+transitions that trigger an unhandled exception (e.g. a failed `assert` or an
+out-of-range list access) are considered invalid. State transitions that cause a
+`uint64` overflow or underflow are also considered invalid.
+
+```python
+def state_transition(
+    state: BeaconState, signed_block: SignedBeaconBlock, validate_result: bool = True
+) -> None:
+    block = signed_block.message
+    # Process slots (including those with no blocks) since block
+    process_slots(state, block.slot)
+    # Verify signature
+    if validate_result:
+        assert verify_block_signature(state, signed_block)
+    # Process block
+    process_block(state, block)
+    # Verify state root
+    if validate_result:
+        assert block.state_root == hash_tree_root(state)
+```
+
+```python
+def verify_block_signature(state: BeaconState, signed_block: SignedBeaconBlock) -> bool:
+    proposer = state.validators[signed_block.message.proposer_index]
+    signing_root = compute_signing_root(
+        signed_block.message, get_domain(state, DOMAIN_BEACON_PROPOSER)
+    )
+    return bls.Verify(proposer.pubkey, signing_root, signed_block.signature)
+```
+
+```python
+def process_slots(state: BeaconState, slot: Slot) -> None:
+    assert state.slot < slot
+    while state.slot < slot:
+        process_slot(state)
+        # Process epoch on the start slot of the next epoch
+        if (state.slot + 1) % SLOTS_PER_EPOCH == 0:
+            process_epoch(state)
+        state.slot = Slot(state.slot + 1)
+```
+
+```python
+def process_slot(state: BeaconState) -> None:
+    # Cache state root
+    previous_state_root = hash_tree_root(state)
+    state.state_roots[state.slot % SLOTS_PER_HISTORICAL_ROOT] = previous_state_root
+    # Cache latest block header state root
+    if state.latest_block_header.state_root == Bytes32():
+        state.latest_block_header.state_root = previous_state_root
+    # Cache block root
+    previous_block_root = hash_tree_root(state.latest_block_header)
+    state.block_roots[state.slot % SLOTS_PER_HISTORICAL_ROOT] = previous_block_root
+```
 
 <!-- NOTES-BEGIN -->
 
@@ -1944,7 +2267,12 @@ def process_epoch(state: BeaconState) -> None:
     process_rewards_and_penalties(state)
     process_registry_updates(state)
     process_slashings(state)
-    process_final_updates(state)
+    process_eth1_data_reset(state)
+    process_effective_balance_updates(state)
+    process_slashings_reset(state)
+    process_randao_mixes_reset(state)
+    process_historical_roots_update(state)
+    process_participation_record_updates(state)
 ```
 
 <!-- NOTES-BEGIN -->
@@ -1956,43 +2284,48 @@ First, we define some helper functions:
 #### Helper functions
 
 ```python
-def get_matching_source_attestations(state: BeaconState, epoch: Epoch) -> Sequence[PendingAttestation]:
+def get_matching_source_attestations(
+    state: BeaconState, epoch: Epoch
+) -> Sequence[PendingAttestation]:
     assert epoch in (get_previous_epoch(state), get_current_epoch(state))
-    return state.current_epoch_attestations if epoch == get_current_epoch(state) else state.previous_epoch_attestations
+    return (
+        state.current_epoch_attestations
+        if epoch == get_current_epoch(state)
+        else state.previous_epoch_attestations
+    )
 ```
 
-When [processing attestations](#Attestations), we already only accept attestations that have the correct Casper FFG source checkpoint (specifically, the most recent justified checkpoint that the chain knows about). The goal of this function is to get all attestations that have a correct Casper FFG source. Hence, it can safely just return all the `PendingAttestation`s for the desired epoch (current or previous).
-
 ```python
-def get_matching_target_attestations(state: BeaconState, epoch: Epoch) -> Sequence[PendingAttestation]:
+def get_matching_target_attestations(
+    state: BeaconState, epoch: Epoch
+) -> Sequence[PendingAttestation]:
     return [
-        a for a in get_matching_source_attestations(state, epoch)
+        a
+        for a in get_matching_source_attestations(state, epoch)
         if a.data.target.root == get_block_root(state, epoch)
     ]
 ```
 
-Returns the subset of `PendingAttestation`s that have the correct Casper FFG target (ie. the checkpoint that is part of the current chain).
-
 ```python
-def get_matching_head_attestations(state: BeaconState, epoch: Epoch) -> Sequence[PendingAttestation]:
+def get_matching_head_attestations(
+    state: BeaconState, epoch: Epoch
+) -> Sequence[PendingAttestation]:
     return [
-        a for a in get_matching_target_attestations(state, epoch)
+        a
+        for a in get_matching_target_attestations(state, epoch)
         if a.data.beacon_block_root == get_block_root_at_slot(state, a.data.slot)
     ]
 ```
 
-Returns the subset of `PendingAttestation`s that have the correct head (ie. they voted for a head that ended up being the head of the chain).
-
 ```python
-def get_unslashed_attesting_indices(state: BeaconState,
-                                    attestations: Sequence[PendingAttestation]) -> Set[ValidatorIndex]:
-    output = set()  # type: Set[ValidatorIndex]
+def get_unslashed_attesting_indices(
+    state: BeaconState, attestations: Sequence[PendingAttestation]
+) -> Set[ValidatorIndex]:
+    output: Set[ValidatorIndex] = set()
     for a in attestations:
-        output = output.union(get_attesting_indices(state, a.data, a.aggregation_bits))
+        output = output.union(get_attesting_indices(state, a))
     return set(filter(lambda index: not state.validators[index].slashed, output))
 ```
-
-Gets the list of attesting indices from a set of attestations, filtering out the indices that have been slashed. The idea here is that if you get slashed, you are still "technically" part of the validator set (see the [note on the validator life cycle](#lifecycle) for reasoning why), but your attestations do not get counted.
 
 ```python
 def get_attesting_balance(state: BeaconState, attestations: Sequence[PendingAttestation]) -> Gwei:
@@ -2004,6 +2337,24 @@ def get_attesting_balance(state: BeaconState, attestations: Sequence[PendingAtte
 ```
 
 <!-- NOTES-BEGIN -->
+
+**get_matching_source_attestations**
+
+When [processing attestations](#Attestations), we already only accept attestations that have the correct Casper FFG source checkpoint (specifically, the most recent justified checkpoint that the chain knows about). The goal of this function is to get all attestations that have a correct Casper FFG source. Hence, it can safely just return all the `PendingAttestation`s for the desired epoch (current or previous).
+
+**get_matching_target_attestations**
+
+Returns the subset of `PendingAttestation`s that have the correct Casper FFG target (ie. the checkpoint that is part of the current chain).
+
+**get_matching_head_attestations**
+
+Returns the subset of `PendingAttestation`s that have the correct head (ie. they voted for a head that ended up being the head of the chain).
+
+**get_unslashed_attesting_indices**
+
+Gets the list of attesting indices from a set of attestations, filtering out the indices that have been slashed. The idea here is that if you get slashed, you are still "technically" part of the validator set (see the [note on the validator life cycle](#lifecycle) for reasoning why), but your attestations do not get counted.
+
+**get_attesting_balance**
 
 Gets the total attesting balance (excluding slashed validators) from a list of attestations.
 
@@ -2022,9 +2373,27 @@ We care about justifications included in the current _and_ the previous epoch, b
 
 ```python
 def process_justification_and_finalization(state: BeaconState) -> None:
+    # Initial FFG checkpoint values have a `0x00` stub for `root`.
+    # Skip FFG updates in the first two epochs to avoid corner cases that might result in modifying this stub.
     if get_current_epoch(state) <= GENESIS_EPOCH + 1:
         return
+    previous_attestations = get_matching_target_attestations(state, get_previous_epoch(state))
+    current_attestations = get_matching_target_attestations(state, get_current_epoch(state))
+    total_active_balance = get_total_active_balance(state)
+    previous_target_balance = get_attesting_balance(state, previous_attestations)
+    current_target_balance = get_attesting_balance(state, current_attestations)
+    weigh_justification_and_finalization(
+        state, total_active_balance, previous_target_balance, current_target_balance
+    )
+```
 
+```python
+def weigh_justification_and_finalization(
+    state: BeaconState,
+    total_active_balance: Gwei,
+    previous_epoch_target_balance: Gwei,
+    current_epoch_target_balance: Gwei,
+) -> None:
     previous_epoch = get_previous_epoch(state)
     current_epoch = get_current_epoch(state)
     old_previous_justified_checkpoint = state.previous_justified_checkpoint
@@ -2032,17 +2401,17 @@ def process_justification_and_finalization(state: BeaconState) -> None:
 
     # Process justifications
     state.previous_justified_checkpoint = state.current_justified_checkpoint
-    state.justification_bits[1:] = state.justification_bits[:JUSTIFICATION_BITS_LENGTH - 1]
+    state.justification_bits[1:] = state.justification_bits[: JUSTIFICATION_BITS_LENGTH - 1]
     state.justification_bits[0] = 0b0
-    matching_target_attestations = get_matching_target_attestations(state, previous_epoch)  # Previous epoch
-    if get_attesting_balance(state, matching_target_attestations) * 3 >= get_total_active_balance(state) * 2:
-        state.current_justified_checkpoint = Checkpoint(epoch=previous_epoch,
-                                                        root=get_block_root(state, previous_epoch))
+    if previous_epoch_target_balance * 3 >= total_active_balance * 2:
+        state.current_justified_checkpoint = Checkpoint(
+            epoch=previous_epoch, root=get_block_root(state, previous_epoch)
+        )
         state.justification_bits[1] = 0b1
-    matching_target_attestations = get_matching_target_attestations(state, current_epoch)  # Current epoch
-    if get_attesting_balance(state, matching_target_attestations) * 3 >= get_total_active_balance(state) * 2:
-        state.current_justified_checkpoint = Checkpoint(epoch=current_epoch,
-                                                        root=get_block_root(state, current_epoch))
+    if current_epoch_target_balance * 3 >= total_active_balance * 2:
+        state.current_justified_checkpoint = Checkpoint(
+            epoch=current_epoch, root=get_block_root(state, current_epoch)
+        )
         state.justification_bits[0] = 0b1
 
     # Process finalizations
@@ -2075,47 +2444,44 @@ The second half of the code uses this justification history, as well as what epo
 def get_base_reward(state: BeaconState, index: ValidatorIndex) -> Gwei:
     total_balance = get_total_active_balance(state)
     effective_balance = state.validators[index].effective_balance
-    return Gwei(effective_balance * BASE_REWARD_FACTOR // integer_squareroot(total_balance) // BASE_REWARDS_PER_EPOCH)
+    return Gwei(
+        effective_balance
+        * BASE_REWARD_FACTOR
+        // integer_squareroot(total_balance)
+        // BASE_REWARDS_PER_EPOCH
+    )
 ```
-
-This is the reward that almost all other rewards in Ethereum are computed as a multiple of. Particularly, note that it's a desired goal of the spec that `effective_balance * BASE_REWARD_FACTOR // integer_squareroot(total_balance)` is the average per-epoch reward received by a validator under theoretical best-case conditions; to achieve this, the base reward equals that amount divided by `BASE_REWARDS_PER_EPOCH`, which is the number of times that a reward of this size will be applied.
 
 ```python
 def get_proposer_reward(state: BeaconState, attesting_index: ValidatorIndex) -> Gwei:
     return Gwei(get_base_reward(state, attesting_index) // PROPOSER_REWARD_QUOTIENT)
 ```
 
-Proposers get a reward equal to up to 1/8 of the base reward for every attester in an attestation they include (though they also get other rewards for including slashings, and in phase 1+ other kinds of objects too)
-
 ```python
 def get_finality_delay(state: BeaconState) -> uint64:
     return get_previous_epoch(state) - state.finalized_checkpoint.epoch
 ```
-
-Gets the number of blocks since the chain was last finalized.
 
 ```python
 def is_in_inactivity_leak(state: BeaconState) -> bool:
     return get_finality_delay(state) > MIN_EPOCHS_TO_INACTIVITY_PENALTY
 ```
 
-If the chain has not been finalized for >4 epochs, the chain enters an "inactivity leak" mode, where inactive validators get progressively penalized more and more, to reduce their influence until blocks get finalized again. See [here](#inactivity-quotient) for what the inactivity leak is, what it's for and how it works.
-
 ```python
 def get_eligible_validator_indices(state: BeaconState) -> Sequence[ValidatorIndex]:
     previous_epoch = get_previous_epoch(state)
     return [
-        ValidatorIndex(index) for index, v in enumerate(state.validators)
-        if is_active_validator(v, previous_epoch) or (v.slashed and previous_epoch + 1 < v.withdrawable_epoch)
+        ValidatorIndex(index)
+        for index, v in enumerate(state.validators)
+        if is_active_validator(v, previous_epoch)
+        or (v.slashed and previous_epoch + 1 < v.withdrawable_epoch)
     ]
 ```
 
-Both active validators and slashed-but-not-yet-withdrawn validators are eligible to receive penalties. This is done to prevent self-slashing from being a way to escape inactivity leaks.
-
 ```python
-def get_attestation_component_deltas(state: BeaconState,
-                                     attestations: Sequence[PendingAttestation]
-                                     ) -> Tuple[Sequence[Gwei], Sequence[Gwei]]:
+def get_attestation_component_deltas(
+    state: BeaconState, attestations: Sequence[PendingAttestation]
+) -> Tuple[Sequence[Gwei], Sequence[Gwei]]:
     """
     Helper with shared logic for use by get source, target, and head deltas functions
     """
@@ -2141,6 +2507,28 @@ def get_attestation_component_deltas(state: BeaconState,
 
 <!-- NOTES-BEGIN -->
 
+**get_base_reward**
+
+This is the reward that almost all other rewards in Ethereum are computed as a multiple of. Particularly, note that it's a desired goal of the spec that `effective_balance * BASE_REWARD_FACTOR // integer_squareroot(total_balance)` is the average per-epoch reward received by a validator under theoretical best-case conditions; to achieve this, the base reward equals that amount divided by `BASE_REWARDS_PER_EPOCH`, which is the number of times that a reward of this size will be applied.
+
+**get_proposer_reward**
+
+Proposers get a reward equal to up to 1/8 of the base reward for every attester in an attestation they include (though they also get other rewards for including slashings, and in phase 1+ other kinds of objects too)
+
+**get_finality_delay**
+
+Gets the number of blocks since the chain was last finalized.
+
+**is_in_inactivity_leak**
+
+If the chain has not been finalized for >4 epochs, the chain enters an "inactivity leak" mode, where inactive validators get progressively penalized more and more, to reduce their influence until blocks get finalized again. See [here](#inactivity-quotient) for what the inactivity leak is, what it's for and how it works.
+
+**get_eligible_validator_indices**
+
+Both active validators and slashed-but-not-yet-withdrawn validators are eligible to receive penalties. This is done to prevent self-slashing from being a way to escape inactivity leaks.
+
+**get_attestation_component_deltas**
+
 This is a helper function that outputs a list of rewards and penalties for validators; it is used for correct-source, correct-target, and correct-head rewards. The general approach is: if portion `p` (eg. `p=0.9` for 90%) of validators achieve some property in their attestations, then those validators get a reward of `base_reward * p`, and the validators that did not achieve that property get a penalty of `base_reward`.
 
 We need penalties to ensure that validating is only net-profitable if you are online at least ~2/3 of the time (in reality the numbers are _slightly_ more forgiving than that, but not by much). We don't want validators that cannot meet that minimum level of liveness, as such validators would hurt more than they help by hindering finality (which requires 2/3 online).
@@ -2154,7 +2542,9 @@ def get_source_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], Sequence[Gwei
     """
     Return attester micro-rewards/penalties for source-vote for each validator.
     """
-    matching_source_attestations = get_matching_source_attestations(state, get_previous_epoch(state))
+    matching_source_attestations = get_matching_source_attestations(
+        state, get_previous_epoch(state)
+    )
     return get_attestation_component_deltas(state, matching_source_attestations)
 ```
 
@@ -2163,7 +2553,9 @@ def get_target_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], Sequence[Gwei
     """
     Return attester micro-rewards/penalties for target-vote for each validator.
     """
-    matching_target_attestations = get_matching_target_attestations(state, get_previous_epoch(state))
+    matching_target_attestations = get_matching_target_attestations(
+        state, get_previous_epoch(state)
+    )
     return get_attestation_component_deltas(state, matching_target_attestations)
 ```
 
@@ -2176,30 +2568,30 @@ def get_head_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], Sequence[Gwei]]
     return get_attestation_component_deltas(state, matching_head_attestations)
 ```
 
-The above three functions just use the `get_attestation_component_deltas` helper to compute rewards and penalties for correct FFG source, correct FFG target, and correct head, respectively.
-
 ```python
 def get_inclusion_delay_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], Sequence[Gwei]]:
     """
     Return proposer and inclusion delay micro-rewards/penalties for each validator.
     """
     rewards = [Gwei(0) for _ in range(len(state.validators))]
-    matching_source_attestations = get_matching_source_attestations(state, get_previous_epoch(state))
+    matching_source_attestations = get_matching_source_attestations(
+        state, get_previous_epoch(state)
+    )
     for index in get_unslashed_attesting_indices(state, matching_source_attestations):
-        attestation = min([
-            a for a in matching_source_attestations
-            if index in get_attesting_indices(state, a.data, a.aggregation_bits)
-        ], key=lambda a: a.inclusion_delay)
+        attestation = min(
+            [a for a in matching_source_attestations if index in get_attesting_indices(state, a)],
+            key=lambda a: a.inclusion_delay,
+        )
         rewards[attestation.proposer_index] += get_proposer_reward(state, index)
-        max_attester_reward = get_base_reward(state, index) - get_proposer_reward(state, index)
+        max_attester_reward = Gwei(
+            get_base_reward(state, index) - get_proposer_reward(state, index)
+        )
         rewards[index] += Gwei(max_attester_reward // attestation.inclusion_delay)
 
     # No penalties associated with inclusion delay
     penalties = [Gwei(0) for _ in range(len(state.validators))]
     return rewards, penalties
 ```
-
-This function processes rewards for getting your attestation included quickly: a full base reward if it gets included in the next slot, and `1/k` of a base reward if it gets included after `k` slots. This incentivizes promptness, reducing the incentive to wait for more than a slot to make sure you have the correct target or head.
 
 ```python
 def get_inactivity_penalty_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], Sequence[Gwei]]:
@@ -2208,15 +2600,23 @@ def get_inactivity_penalty_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], S
     """
     penalties = [Gwei(0) for _ in range(len(state.validators))]
     if is_in_inactivity_leak(state):
-        matching_target_attestations = get_matching_target_attestations(state, get_previous_epoch(state))
-        matching_target_attesting_indices = get_unslashed_attesting_indices(state, matching_target_attestations)
+        matching_target_attestations = get_matching_target_attestations(
+            state, get_previous_epoch(state)
+        )
+        matching_target_attesting_indices = get_unslashed_attesting_indices(
+            state, matching_target_attestations
+        )
         for index in get_eligible_validator_indices(state):
             # If validator is performing optimally this cancels all rewards for a neutral balance
             base_reward = get_base_reward(state, index)
-            penalties[index] += Gwei(BASE_REWARDS_PER_EPOCH * base_reward - get_proposer_reward(state, index))
+            penalties[index] += Gwei(
+                BASE_REWARDS_PER_EPOCH * base_reward - get_proposer_reward(state, index)
+            )
             if index not in matching_target_attesting_indices:
                 effective_balance = state.validators[index].effective_balance
-                penalties[index] += Gwei(effective_balance * get_finality_delay(state) // INACTIVITY_PENALTY_QUOTIENT)
+                penalties[index] += Gwei(
+                    effective_balance * get_finality_delay(state) // INACTIVITY_PENALTY_QUOTIENT
+                )
 
     # No rewards associated with inactivity penalties
     rewards = [Gwei(0) for _ in range(len(state.validators))]
@@ -2224,6 +2624,16 @@ def get_inactivity_penalty_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], S
 ```
 
 <!-- NOTES-BEGIN -->
+
+**get_head_deltas**
+
+The above three functions just use the `get_attestation_component_deltas` helper to compute rewards and penalties for correct FFG source, correct FFG target, and correct head, respectively.
+
+**get_inclusion_delay_deltas**
+
+This function processes rewards for getting your attestation included quickly: a full base reward if it gets included in the next slot, and `1/k` of a base reward if it gets included after `k` slots. This incentivizes promptness, reducing the incentive to wait for more than a slot to make sure you have the correct target or head.
+
+**get_inactivity_penalty_deltas**
 
 This code implements the [inactivity leak](#inactivity-quotient).
 
@@ -2253,12 +2663,15 @@ def get_attestation_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], Sequence
     return rewards, penalties
 ```
 
+<!-- NOTES-BEGIN -->
+
 This function combines rewards and penalties from all of the above sources into the total rewards and penalties.
 
 ##### `process_rewards_and_penalties`
 
 ```python
 def process_rewards_and_penalties(state: BeaconState) -> None:
+    # No rewards are applied at the end of `GENESIS_EPOCH` because rewards are for work done in the previous epoch
     if get_current_epoch(state) == GENESIS_EPOCH:
         return
 
@@ -2267,6 +2680,8 @@ def process_rewards_and_penalties(state: BeaconState) -> None:
         increase_balance(state, ValidatorIndex(index), rewards[index])
         decrease_balance(state, ValidatorIndex(index), penalties[index])
 ```
+
+<!-- NOTES-BEGIN -->
 
 This function combines all of the above logic and processes these rewards and penalties.
 
@@ -2279,17 +2694,24 @@ def process_registry_updates(state: BeaconState) -> None:
         if is_eligible_for_activation_queue(validator):
             validator.activation_eligibility_epoch = get_current_epoch(state) + 1
 
-        if is_active_validator(validator, get_current_epoch(state)) and validator.effective_balance <= EJECTION_BALANCE:
+        if (
+            is_active_validator(validator, get_current_epoch(state))
+            and validator.effective_balance <= EJECTION_BALANCE
+        ):
             initiate_validator_exit(state, ValidatorIndex(index))
 
     # Queue validators eligible for activation and not yet dequeued for activation
-    activation_queue = sorted([
-        index for index, validator in enumerate(state.validators)
-        if is_eligible_for_activation(state, validator)
+    activation_queue = sorted(
+        [
+            index
+            for index, validator in enumerate(state.validators)
+            if is_eligible_for_activation(state, validator)
+        ],
         # Order by the sequence of activation_eligibility_epoch setting and then index
-    ], key=lambda index: (state.validators[index].activation_eligibility_epoch, index))
+        key=lambda index: (state.validators[index].activation_eligibility_epoch, index),
+    )
     # Dequeued validators for activation up to churn limit
-    for index in activation_queue[:get_validator_churn_limit(state)]:
+    for index in activation_queue[: get_validator_churn_limit(state)]:
         validator = state.validators[index]
         validator.activation_epoch = compute_activation_exit_epoch(get_current_epoch(state))
 ```
@@ -2327,10 +2749,18 @@ The fact that slashed validators are exposed to 4 eeks of inactivity penalties i
 def process_slashings(state: BeaconState) -> None:
     epoch = get_current_epoch(state)
     total_balance = get_total_active_balance(state)
+    adjusted_total_slashing_balance = min(
+        sum(state.slashings) * PROPORTIONAL_SLASHING_MULTIPLIER, total_balance
+    )
     for index, validator in enumerate(state.validators):
-        if validator.slashed and epoch + EPOCHS_PER_SLASHINGS_VECTOR // 2 == validator.withdrawable_epoch:
+        if (
+            validator.slashed
+            and epoch + EPOCHS_PER_SLASHINGS_VECTOR // 2 == validator.withdrawable_epoch
+        ):
             increment = EFFECTIVE_BALANCE_INCREMENT  # Factored out from penalty numerator to avoid uint64 overflow
-            penalty_numerator = validator.effective_balance // increment * min(sum(state.slashings) * 3, total_balance)
+            penalty_numerator = (
+                validator.effective_balance // increment * adjusted_total_slashing_balance
+            )
             penalty = penalty_numerator // total_balance * increment
             decrease_balance(state, ValidatorIndex(index), penalty)
 ```
@@ -2385,6 +2815,8 @@ This function does a few miscellaneous operations, particularly:
 * Shifts the list of `PendingAttestations` for the "current" epoch to the list meant for the "previous" epoch
 
 ### Block processing
+
+<!-- NOTES-BEGIN -->
 
 This next section, finally, deals with the procedure for processing a block itself. This part is surprisingly not-that-complicated; the bulk of the complexity is in either the helpers or in end-of-epoch processing.
 
@@ -2458,7 +2890,10 @@ See [the section on seeds](#seeds) to understand what's going on here.
 ```python
 def process_eth1_data(state: BeaconState, body: BeaconBlockBody) -> None:
     state.eth1_data_votes.append(body.eth1_data)
-    if state.eth1_data_votes.count(body.eth1_data) * 2 > EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH:
+    if (
+        state.eth1_data_votes.count(body.eth1_data) * 2
+        > EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH
+    ):
         state.eth1_data = body.eth1_data
 ```
 
@@ -2471,7 +2906,9 @@ Store vote counts for every eth1 block that has votes; if any eth1 block wins ma
 ```python
 def process_operations(state: BeaconState, body: BeaconBlockBody) -> None:
     # Verify that outstanding deposits are processed up to the maximum number of deposits
-    assert len(body.deposits) == min(MAX_DEPOSITS, state.eth1_data.deposit_count - state.eth1_deposit_index)
+    assert len(body.deposits) == min(
+        MAX_DEPOSITS, state.eth1_data.deposit_count - state.eth1_deposit_index
+    )
 
     def for_ops(operations: Sequence[Any], fn: Callable[[BeaconState, Any], None]) -> None:
         for operation in operations:
@@ -2506,7 +2943,9 @@ def process_proposer_slashing(state: BeaconState, proposer_slashing: ProposerSla
     assert is_slashable_validator(proposer, get_current_epoch(state))
     # Verify signatures
     for signed_header in (proposer_slashing.signed_header_1, proposer_slashing.signed_header_2):
-        domain = get_domain(state, DOMAIN_BEACON_PROPOSER, compute_epoch_at_slot(signed_header.message.slot))
+        domain = get_domain(
+            state, DOMAIN_BEACON_PROPOSER, compute_epoch_at_slot(signed_header.message.slot)
+        )
         signing_root = compute_signing_root(signed_header.message, domain)
         assert bls.Verify(proposer.pubkey, signing_root, signed_header.signature)
 
@@ -2582,22 +3021,57 @@ To ensure the chain finalizes, we force attesters to (i) use the latest justifie
 ##### Deposits
 
 ```python
-def get_validator_from_deposit(state: BeaconState, deposit: Deposit) -> Validator:
-    amount = deposit.data.amount
+def get_validator_from_deposit(
+    pubkey: BLSPubkey, withdrawal_credentials: Bytes32, amount: uint64
+) -> Validator:
     effective_balance = min(amount - amount % EFFECTIVE_BALANCE_INCREMENT, MAX_EFFECTIVE_BALANCE)
 
     return Validator(
-        pubkey=deposit.data.pubkey,
-        withdrawal_credentials=deposit.data.withdrawal_credentials,
+        pubkey=pubkey,
+        withdrawal_credentials=withdrawal_credentials,
+        effective_balance=effective_balance,
+        slashed=False,
         activation_eligibility_epoch=FAR_FUTURE_EPOCH,
         activation_epoch=FAR_FUTURE_EPOCH,
         exit_epoch=FAR_FUTURE_EPOCH,
         withdrawable_epoch=FAR_FUTURE_EPOCH,
-        effective_balance=effective_balance,
     )
 ```
 
-Converts a `Deposit` record (created by the eth1 deposit contract) into a `Validator` object that goes into the eth2 state.
+```python
+def add_validator_to_registry(
+    state: BeaconState, pubkey: BLSPubkey, withdrawal_credentials: Bytes32, amount: uint64
+) -> None:
+    state.validators.append(get_validator_from_deposit(pubkey, withdrawal_credentials, amount))
+    state.balances.append(amount)
+```
+
+```python
+def apply_deposit(
+    state: BeaconState,
+    pubkey: BLSPubkey,
+    withdrawal_credentials: Bytes32,
+    amount: uint64,
+    signature: BLSSignature,
+) -> None:
+    validator_pubkeys = [v.pubkey for v in state.validators]
+    if pubkey not in validator_pubkeys:
+        # Verify the deposit signature (proof of possession) which is not checked by the deposit contract
+        deposit_message = DepositMessage(
+            pubkey=pubkey,
+            withdrawal_credentials=withdrawal_credentials,
+            amount=amount,
+        )
+        # Fork-agnostic domain since deposits are valid across forks
+        domain = compute_domain(DOMAIN_DEPOSIT)
+        signing_root = compute_signing_root(deposit_message, domain)
+        if bls.Verify(pubkey, signing_root, signature):
+            add_validator_to_registry(state, pubkey, withdrawal_credentials, amount)
+    else:
+        # Increase balance by deposit amount
+        index = ValidatorIndex(validator_pubkeys.index(pubkey))
+        increase_balance(state, index, amount)
+```
 
 ```python
 def process_deposit(state: BeaconState, deposit: Deposit) -> None:
@@ -2605,7 +3079,8 @@ def process_deposit(state: BeaconState, deposit: Deposit) -> None:
     assert is_valid_merkle_branch(
         leaf=hash_tree_root(deposit.data),
         branch=deposit.proof,
-        depth=DEPOSIT_CONTRACT_TREE_DEPTH + 1,  # Add 1 for the List length mix-in
+        # Add 1 for the List length mix-in
+        depth=DEPOSIT_CONTRACT_TREE_DEPTH + 1,
         index=state.eth1_deposit_index,
         root=state.eth1_data.deposit_root,
     )
@@ -2613,28 +3088,13 @@ def process_deposit(state: BeaconState, deposit: Deposit) -> None:
     # Deposits must be processed in order
     state.eth1_deposit_index += 1
 
-    pubkey = deposit.data.pubkey
-    amount = deposit.data.amount
-    validator_pubkeys = [v.pubkey for v in state.validators]
-    if pubkey not in validator_pubkeys:
-        # Verify the deposit signature (proof of possession) which is not checked by the deposit contract
-        deposit_message = DepositMessage(
-            pubkey=deposit.data.pubkey,
-            withdrawal_credentials=deposit.data.withdrawal_credentials,
-            amount=deposit.data.amount,
-        )
-        domain = compute_domain(DOMAIN_DEPOSIT)  # Fork-agnostic domain since deposits are valid across forks
-        signing_root = compute_signing_root(deposit_message, domain)
-        if not bls.Verify(pubkey, signing_root, deposit.data.signature):
-            return
-#BeaconBlockBody
-        # Add validator and balance entries
-        state.validators.append(get_validator_from_deposit(state, deposit))
-        state.balances.append(amount)
-    else:
-        # Increase balance by deposit amount
-        index = ValidatorIndex(validator_pubkeys.index(pubkey))
-        increase_balance(state, index, amount)
+    apply_deposit(
+        state=state,
+        pubkey=deposit.data.pubkey,
+        withdrawal_credentials=deposit.data.withdrawal_credentials,
+        amount=deposit.data.amount,
+        signature=deposit.data.signature,
+    )
 ```
 
 <!-- NOTES-BEGIN -->
@@ -2664,7 +3124,6 @@ def process_voluntary_exit(state: BeaconState, signed_voluntary_exit: SignedVolu
     # Initiate exit
     initiate_validator_exit(state, voluntary_exit.validator_index)
 ```
-
 <!-- NOTES-BEGIN -->
 
 Validators can voluntarily sign a message that can be included on-chain to exit the validator set. Note that there is a minimum active period of ~1 day before a validator can exit; this prevents validators from repeatedly depositing and withdrawing to try to get onto a particular shard committee, as well as polluting the deposit/withdraw queue in general.

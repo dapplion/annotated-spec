@@ -43,6 +43,13 @@
 
 ## Introduction
 
+This upgrade adds transaction execution to the beacon chain as part of Bellatrix
+upgrade.
+
+Additionally, this upgrade introduces the following minor changes:
+
+- Penalty parameter updates to their planned maximally punitive values
+
 <!-- NOTES-BEGIN -->
 
 The Merge is the event in which the Ethereum proof of work chain is deprecated, and the beacon chain (the Ethereum proof of stake chain) takes over as the chain that Ethereum is running on. To simplify the Merge and allow it to happen faster, the Merge is designed via a **block-inside-a-block structure**: the Ethereum PoW chain appears to continue, except past a certain transition point (i) the PoW nonces are no longer required to be valid, and (ii) the Ethereum PoW blocks, from then on referred to as **execution blocks**, are required to be embedded inside of beacon chain blocks.
@@ -62,11 +69,10 @@ The parameters are expected to be set such that the beacon chain reaches the `ME
 
 *Note*: The `Transaction` type is a stub which is not final.
 
-| Name | SSZ equivalent | Description |
-| - | - | - |
-| `OpaqueTransaction` | `ByteList[MAX_BYTES_PER_OPAQUE_TRANSACTION]` | a [typed transaction envelope](https://eips.ethereum.org/EIPS/eip-2718#opaque-byte-array-rather-than-an-rlp-array) structured as `TransactionType \|\| TransactionPayload` |
-| `Transaction` | `Union[OpaqueTransaction]` | a transaction |
-| `ExecutionAddress` | `Bytes20` | Address of account on the execution layer |
+| Name               | SSZ equivalent                        | Description                                                                                                                                       |
+| ------------------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Transaction`      | `ByteList[MAX_BYTES_PER_TRANSACTION]` | either a [typed transaction envelope](https://eips.ethereum.org/EIPS/eip-2718#opaque-byte-array-rather-than-an-rlp-array) or a legacy transaction |
+| `ExecutionAddress` | `Bytes20`                             | Address of account on the execution layer                                                                                                         |
 
 <!-- NOTES-BEGIN -->
 
@@ -76,14 +82,12 @@ The beacon chain uses [SSZ](https://github.com/ethereum/consensus-specs/blob/dev
 
 ### Execution
 
-| Name | Value |
-| - | - |
-| `MAX_BYTES_PER_OPAQUE_TRANSACTION` | `uint64(2**20)` (= 1,048,576) |
-| `MAX_TRANSACTIONS_PER_PAYLOAD` | `uint64(2**14)` (= 16,384) |
-| `BYTES_PER_LOGS_BLOOM` | `uint64(2**8)` (= 256) |
-| `GAS_LIMIT_DENOMINATOR` | `uint64(2**10)` (= 1,024) |
-| `MIN_GAS_LIMIT` | `uint64(5000)` (= 5,000) |
-| `MAX_EXTRA_DATA_BYTES` | `2**5` (= 32) |
+| Name                           | Value                             |
+| ------------------------------ | --------------------------------- |
+| `MAX_BYTES_PER_TRANSACTION`    | `uint64(2**30)` (= 1,073,741,824) |
+| `MAX_TRANSACTIONS_PER_PAYLOAD` | `uint64(2**20)` (= 1,048,576)     |
+| `BYTES_PER_LOGS_BLOOM`         | `uint64(2**8)` (= 256)            |
+| `MAX_EXTRA_DATA_BYTES`         | `2**5` (= 32)                     |
 
 <!-- NOTES-BEGIN -->
 
@@ -93,10 +97,11 @@ The `GAS_LIMIT_DENOMINATOR` is the inverse of the max fraction by which a block'
 
 ### Transition settings
 
-| Name | Value |
-| - | - |
-| `TERMINAL_TOTAL_DIFFICULTY` | **TBD** |
-| `TERMINAL_BLOCK_HASH` | `Hash32('0x0000000000000000000000000000000000000000000000000000000000000000')` |
+| Name                                   | Value                                                |
+| -------------------------------------- | ---------------------------------------------------- |
+| `TERMINAL_TOTAL_DIFFICULTY`            | `58750000000000000000000` (Estimated: Sept 15, 2022) |
+| `TERMINAL_BLOCK_HASH`                  | `Hash32()`                                           |
+| `TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH` | `FAR_FUTURE_EPOCH`                                   |
 
 <!-- NOTES-BEGIN -->
 
@@ -113,61 +118,48 @@ Note that if the `TERMINAL_BLOCK_HASH` is set to any value that is clearly not a
 ```python
 class BeaconBlockBody(Container):
     randao_reveal: BLSSignature
-    eth1_data: Eth1Data  # Eth1 data vote
-    graffiti: Bytes32  # Arbitrary data
-    # Operations
+    eth1_data: Eth1Data
+    graffiti: Bytes32
     proposer_slashings: List[ProposerSlashing, MAX_PROPOSER_SLASHINGS]
     attester_slashings: List[AttesterSlashing, MAX_ATTESTER_SLASHINGS]
     attestations: List[Attestation, MAX_ATTESTATIONS]
     deposits: List[Deposit, MAX_DEPOSITS]
     voluntary_exits: List[SignedVoluntaryExit, MAX_VOLUNTARY_EXITS]
     sync_aggregate: SyncAggregate
-    # Execution
-    execution_payload: ExecutionPayload  # [New in Merge]
+    # [New in Bellatrix]
+    execution_payload: ExecutionPayload
 ```
-
-Extend a beacon block with the `ExecutionPayload` object (the embedded execution block).
 
 #### `BeaconState`
 
 ```python
 class BeaconState(Container):
-    # Versioning
     genesis_time: uint64
     genesis_validators_root: Root
     slot: Slot
     fork: Fork
-    # History
     latest_block_header: BeaconBlockHeader
     block_roots: Vector[Root, SLOTS_PER_HISTORICAL_ROOT]
     state_roots: Vector[Root, SLOTS_PER_HISTORICAL_ROOT]
     historical_roots: List[Root, HISTORICAL_ROOTS_LIMIT]
-    # Eth1
     eth1_data: Eth1Data
     eth1_data_votes: List[Eth1Data, EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH]
     eth1_deposit_index: uint64
-    # Registry
     validators: List[Validator, VALIDATOR_REGISTRY_LIMIT]
     balances: List[Gwei, VALIDATOR_REGISTRY_LIMIT]
-    # Randomness
     randao_mixes: Vector[Bytes32, EPOCHS_PER_HISTORICAL_VECTOR]
-    # Slashings
-    slashings: Vector[Gwei, EPOCHS_PER_SLASHINGS_VECTOR]  # Per-epoch sums of slashed effective balances
-    # Participation
+    slashings: Vector[Gwei, EPOCHS_PER_SLASHINGS_VECTOR]
     previous_epoch_participation: List[ParticipationFlags, VALIDATOR_REGISTRY_LIMIT]
     current_epoch_participation: List[ParticipationFlags, VALIDATOR_REGISTRY_LIMIT]
-    # Finality
-    justification_bits: Bitvector[JUSTIFICATION_BITS_LENGTH]  # Bit set for every recent justified epoch
+    justification_bits: Bitvector[JUSTIFICATION_BITS_LENGTH]
     previous_justified_checkpoint: Checkpoint
     current_justified_checkpoint: Checkpoint
     finalized_checkpoint: Checkpoint
-    # Inactivity
     inactivity_scores: List[uint64, VALIDATOR_REGISTRY_LIMIT]
-    # Sync
     current_sync_committee: SyncCommittee
     next_sync_committee: SyncCommittee
-    # Execution
-    latest_execution_payload_header: ExecutionPayloadHeader  # [New in Merge]
+    # [New in Bellatrix]
+    latest_execution_payload_header: ExecutionPayloadHeader
 ```
 
 <!-- NOTES-BEGIN -->
@@ -178,25 +170,26 @@ Extend the `BeaconState` by adding the `ExecutionPayloadHeader` of the most rece
 
 #### `ExecutionPayload`
 
-*Note*: The `base_fee_per_gas` field is serialized in little-endian.
+*Note*: `fee_recipient`, `prev_randao`, and `block_number` correspond to
+`beneficiary`, `difficulty`, and `number` in
+[the yellow paper](https://ethereum.github.io/yellowpaper/paper.pdf),
+respectively.
 
 ```python
 class ExecutionPayload(Container):
-    # Execution block header fields
     parent_hash: Hash32
-    coinbase: ExecutionAddress  # 'beneficiary' in the yellow paper
+    fee_recipient: ExecutionAddress
     state_root: Bytes32
-    receipt_root: Bytes32  # 'receipts root' in the yellow paper
+    receipts_root: Bytes32
     logs_bloom: ByteVector[BYTES_PER_LOGS_BLOOM]
-    random: Bytes32  # 'difficulty' in the yellow paper
-    block_number: uint64  # 'number' in the yellow paper
+    prev_randao: Bytes32
+    block_number: uint64
     gas_limit: uint64
     gas_used: uint64
     timestamp: uint64
     extra_data: ByteList[MAX_EXTRA_DATA_BYTES]
-    base_fee_per_gas: Bytes32  # base fee introduced in EIP-1559, little-endian serialized
-    # Extra payload fields
-    block_hash: Hash32  # Hash of execution block
+    base_fee_per_gas: uint256
+    block_hash: Hash32
     transactions: List[Transaction, MAX_TRANSACTIONS_PER_PAYLOAD]
 ```
 
@@ -206,23 +199,23 @@ The data structure that stores the execution block. Note that the execution bloc
 
 #### `ExecutionPayloadHeader`
 
+*Note*: `block_hash` is the hash of the execution block.
+
 ```python
 class ExecutionPayloadHeader(Container):
-    # Execution block header fields
     parent_hash: Hash32
-    coinbase: ExecutionAddress
+    fee_recipient: ExecutionAddress
     state_root: Bytes32
-    receipt_root: Bytes32
+    receipts_root: Bytes32
     logs_bloom: ByteVector[BYTES_PER_LOGS_BLOOM]
-    random: Bytes32
+    prev_randao: Bytes32
     block_number: uint64
     gas_limit: uint64
     gas_used: uint64
     timestamp: uint64
     extra_data: ByteList[MAX_EXTRA_DATA_BYTES]
-    base_fee_per_gas: Bytes32
-    # Extra payload fields
-    block_hash: Hash32  # Hash of execution block
+    base_fee_per_gas: uint256
+    block_hash: Hash32
     transactions_root: Root
 ```
 
@@ -258,7 +251,7 @@ Returns whether or not a given block is the first block that contains an embedde
 
 ```python
 def is_execution_enabled(state: BeaconState, body: BeaconBlockBody) -> bool:
-    return is_merge_block(state, body) or is_merge_complete(state)
+    return is_merge_transition_block(state, body) or is_merge_transition_complete(state)
 ```
 
 ### Misc
@@ -295,13 +288,16 @@ def execute_payload(self: ExecutionEngine, execution_payload: ExecutionPayload) 
 
 ### Block processing
 
-*Note*: The call to the `process_execution_payload` must happen before the call to the `process_randao` as the former depends on the `randao_mix` computed with the reveal of the previous block.
+*Note*: The call to the `process_execution_payload` must happen before the call
+to the `process_randao` as the former depends on the `randao_mix` computed with
+the reveal of the previous block.
 
 ```python
 def process_block(state: BeaconState, block: BeaconBlock) -> None:
     process_block_header(state, block)
     if is_execution_enabled(state, block.body):
-        process_execution_payload(state, block.body.execution_payload, EXECUTION_ENGINE)  # [New in Merge]
+        # [New in Bellatrix]
+        process_execution_payload(state, block.body, EXECUTION_ENGINE)
     process_randao(state, block.body)
     process_eth1_data(state, block.body)
     process_operations(state, block.body)
@@ -346,27 +342,30 @@ Enforces the same gas limit checking as the Ethereum PoW chain does today.
 #### `process_execution_payload`
 
 ```python
-def process_execution_payload(state: BeaconState, payload: ExecutionPayload, execution_engine: ExecutionEngine) -> None:
-    # Verify consistency of the parent hash, block number, base fee per gas and gas limit
-    # with respect to the previous execution payload header
-    if is_merge_complete(state):
+def process_execution_payload(
+    state: BeaconState, body: BeaconBlockBody, execution_engine: ExecutionEngine
+) -> None:
+    payload = body.execution_payload
+
+    # Verify consistency of the parent hash with respect to the previous execution payload header
+    if is_merge_transition_complete(state):
         assert payload.parent_hash == state.latest_execution_payload_header.block_hash
-        assert payload.block_number == state.latest_execution_payload_header.block_number + uint64(1)
-        assert is_valid_gas_limit(payload, state.latest_execution_payload_header)
-    # Verify random
-    assert payload.random == get_randao_mix(state, get_current_epoch(state))
+    # Verify prev_randao
+    assert payload.prev_randao == get_randao_mix(state, get_current_epoch(state))
     # Verify timestamp
-    assert payload.timestamp == compute_timestamp_at_slot(state, state.slot)
+    assert payload.timestamp == compute_time_at_slot(state, state.slot)
     # Verify the execution payload is valid
-    assert execution_engine.execute_payload(payload)
+    assert execution_engine.verify_and_notify_new_payload(
+        NewPayloadRequest(execution_payload=payload)
+    )
     # Cache execution payload header
     state.latest_execution_payload_header = ExecutionPayloadHeader(
         parent_hash=payload.parent_hash,
-        coinbase=payload.coinbase,
+        fee_recipient=payload.fee_recipient,
         state_root=payload.state_root,
-        receipt_root=payload.receipt_root,
+        receipts_root=payload.receipts_root,
         logs_bloom=payload.logs_bloom,
-        random=payload.random,
+        prev_randao=payload.prev_randao,
         block_number=payload.block_number,
         gas_limit=payload.gas_limit,
         gas_used=payload.gas_used,

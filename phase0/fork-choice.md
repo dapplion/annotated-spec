@@ -38,7 +38,12 @@
 
 ## Introduction
 
-This document is the beacon chain **fork choice rule** specification, part of Ethereum 2.0 Phase 0. It describes the mechanism for how to choose what is the "canonical" chain in the event that there are multiple conflicting versions of the chain to choose from. All blockchains have the possibility of temporary disagreement, either because of malicious behavior (eg. a block proposer publishing two different blocks at the same time), or just network latency (eg. a block being delayed by a few seconds, causing it to be broadcasted around the same time as the _next_ block that gets published by someone else). In such cases, some mechanism is needed to choose which of the two (or more) chains represents the "actual" history and state of the system (this chain is called the **canonical chain**).
+This document is the beacon chain fork choice spec, part of Phase 0. It assumes
+the [beacon chain state transition function spec](./beacon-chain.md).
+
+<!-- NOTES-BEGIN -->
+
+It describes the mechanism for how to choose what is the "canonical" chain in the event that there are multiple conflicting versions of the chain to choose from. All blockchains have the possibility of temporary disagreement, either because of malicious behavior (eg. a block proposer publishing two different blocks at the same time), or just network latency (eg. a block being delayed by a few seconds, causing it to be broadcasted around the same time as the _next_ block that gets published by someone else). In such cases, some mechanism is needed to choose which of the two (or more) chains represents the "actual" history and state of the system (this chain is called the **canonical chain**).
 
 PoW chains (Bitcoin, Ethereum 1.0, etc) typically use some variant of the **longest chain rule**: if there is a disagreement between chains, pick the chain that is the longest.
 
@@ -97,35 +102,63 @@ Now, let's go through the specification...
 
 ## Fork choice
 
-One important thing to note is that the fork choice _is not a pure function_; that is, what you accept as a canonical chain does not depend just on what data you also have, but also when you received it. The main reason this is done is to enforce finality: if you accept a block as finalized, then you will never revert it, even if you later see a conflicting block as finalized. Such a situation would only happen in cases where there is an active >1/3 attack on the chain; in such cases, we expect extra-protocol measures to be required to get all clients back on the same chain. There are also other deviations from purity, particularly a "sticky" choice of the latest justified block, where the latest justified block can only change near the beginning of an epoch; this is done to prevent certain kinds of "bouncing attacks".
+The head block root associated with a `store` is defined as `get_head(store)`.
+At genesis, let `store = get_forkchoice_store(genesis_state, genesis_block)` and
+update `store` by running:
 
-We implement this fork choice by defining a `store` that contains received fork-choice-relevant information, as well as some "memory variables", and a function `get_head(store)`.
+- `on_tick(store, time)` whenever `time > store.time` where `time` is the
+  current Unix time
+- `on_block(store, block)` whenever a block `block: SignedBeaconBlock` is
+  received
+- `on_attestation(store, attestation)` whenever an attestation `attestation` is
+  received
+- `on_attester_slashing(store, attester_slashing)` whenever an attester slashing
+  `attester_slashing` is received
 
-At genesis, let `store = get_forkchoice_store(genesis_state)` and update `store` by running:
-
-- `on_tick(store, time)` whenever `time > store.time` where `time` is the current Unix time
-- `on_block(store, block)` whenever a block `block: SignedBeaconBlock` is received
-- `on_attestation(store, attestation)` whenever an attestation `attestation` is received
-
-Any of the above handlers that trigger an unhandled exception (e.g. a failed assert or an out-of-range list access) are considered invalid. Invalid calls to handlers must not modify `store`.
+Any of the above handlers that trigger an unhandled exception (e.g. a failed
+assert or an out-of-range list access) are considered invalid. Invalid calls to
+handlers must not modify `store`.
 
 *Notes*:
 
-1) **Leap seconds**: Slots will last `SECONDS_PER_SLOT + 1` or `SECONDS_PER_SLOT - 1` seconds around leap seconds. This is automatically handled by [UNIX time](https://en.wikipedia.org/wiki/Unix_time).
-2) **Honest clocks**: Honest nodes are assumed to have clocks synchronized within `SECONDS_PER_SLOT` seconds of each other.
-3) **Eth1 data**: The large `ETH1_FOLLOW_DISTANCE` specified in the [honest validator document](https://github.com/ethereum/eth2.0-specs/blob/dev/specs/phase0/validator.md) should ensure that `state.latest_eth1_data` of the canonical Ethereum 2.0 chain remains consistent with the canonical Ethereum 1.0 chain. If not, emergency manual intervention will be required.
-4) **Manual forks**: Manual forks may arbitrarily change the fork choice rule but are expected to be enacted at epoch transitions, with the fork details reflected in `state.fork`.
-5) **Implementation**: The implementation found in this specification is constructed for ease of understanding rather than for optimization in computation, space, or any other resource. A number of optimized alternatives can be found [here](https://github.com/protolambda/lmd-ghost).
+1. **Leap seconds**: Slots will last `SECONDS_PER_SLOT + 1` or
+   `SECONDS_PER_SLOT - 1` seconds around leap seconds. This is automatically
+   handled by [UNIX time](https://en.wikipedia.org/wiki/Unix_time).
+2. **Honest clocks**: Honest nodes are assumed to have clocks synchronized
+   within `SECONDS_PER_SLOT` seconds of each other.
+3. **Eth1 data**: The large `ETH1_FOLLOW_DISTANCE` specified in the
+   [honest validator document](./validator.md) should ensure that
+   `state.latest_eth1_data` of the canonical beacon chain remains consistent
+   with the canonical Ethereum proof-of-work chain. If not, emergency manual
+   intervention will be required.
+4. **Manual forks**: Manual forks may arbitrarily change the fork choice rule
+   but are expected to be enacted at epoch transitions, with the fork details
+   reflected in `state.fork`.
+5. **Implementation**: The implementation found in this specification is
+   constructed for ease of understanding rather than for optimization in
+   computation, space, or any other resource. A number of optimized alternatives
+   can be found [here](https://github.com/protolambda/lmd-ghost).
+
+<!-- NOTES-BEGIN -->
+
+One important thing to note is that the fork choice _is not a pure function_; that is, what you accept as a canonical chain does not depend just on what data you also have, but also when you received it. The main reason this is done is to enforce finality: if you accept a block as finalized, then you will never revert it, even if you later see a conflicting block as finalized. Such a situation would only happen in cases where there is an active >1/3 attack on the chain; in such cases, we expect extra-protocol measures to be required to get all clients back on the same chain. There are also other deviations from purity, particularly a "sticky" choice of the latest justified block, where the latest justified block can only change near the beginning of an epoch; this is done to prevent certain kinds of "bouncing attacks".
 
 ### Configuration
 
-| Name | Value | Unit | Duration |
-| - | - | :-: | :-: |
-| `SAFE_SLOTS_TO_UPDATE_JUSTIFIED` | `2**3` (= 8) | slots | 96 seconds |
+| Name                                  | Value         |
+| ------------------------------------- | ------------- |
+| `PROPOSER_SCORE_BOOST`                | `uint64(40)`  |
+| `REORG_HEAD_WEIGHT_THRESHOLD`         | `uint64(20)`  |
+| `REORG_PARENT_WEIGHT_THRESHOLD`       | `uint64(160)` |
+| `REORG_MAX_EPOCHS_SINCE_FINALIZATION` | `Epoch(2)`    |
 
-The justified checkpoint can only be changed in the first 8 slots of an epoch; see below for reasoning why this is done.
+- The proposer score boost and re-org weight threshold are percentage values
+  that are measured with respect to the weight of a single committee. See
+  `calculate_committee_fraction`.
 
 ### Helpers
+
+<!-- NOTES-BEGIN -->
 
 Here, we define the data structure for the `store`. It only has one new subtype, the `LatestMessage` (the vote in the latest [meaning highest-epoch] valid attestation received from a validator).
 
@@ -140,6 +173,23 @@ class LatestMessage(object):
 
 #### `Store`
 
+The `Store` is responsible for tracking information required for the fork choice
+algorithm. The important fields being tracked are described below:
+
+- `justified_checkpoint`: the justified checkpoint used as the starting point
+  for the LMD GHOST fork choice algorithm.
+- `finalized_checkpoint`: the highest known finalized checkpoint. The fork
+  choice only considers blocks that are not conflicting with this checkpoint.
+- `unrealized_justified_checkpoint` & `unrealized_finalized_checkpoint`: these
+  track the highest justified & finalized checkpoints resp., without regard to
+  whether on-chain ***realization*** has occurred, i.e. FFG processing of new
+  attestations within the state transition function. This is an important
+  distinction from `justified_checkpoint` & `finalized_checkpoint`, because they
+  will only track the checkpoints that are realized on-chain. Note that on-chain
+  processing of FFG information only happens at epoch boundaries.
+- `unrealized_justifications`: stores a map of block root to the unrealized
+  justified checkpoint observed in that block.
+
 ```python
 @dataclass
 class Store(object):
@@ -147,12 +197,19 @@ class Store(object):
     genesis_time: uint64
     justified_checkpoint: Checkpoint
     finalized_checkpoint: Checkpoint
-    best_justified_checkpoint: Checkpoint
+    unrealized_justified_checkpoint: Checkpoint
+    unrealized_finalized_checkpoint: Checkpoint
+    proposer_boost_root: Root
+    equivocating_indices: Set[ValidatorIndex]
     blocks: Dict[Root, BeaconBlock] = field(default_factory=dict)
     block_states: Dict[Root, BeaconState] = field(default_factory=dict)
+    block_timeliness: Dict[Root, boolean] = field(default_factory=dict)
     checkpoint_states: Dict[Checkpoint, BeaconState] = field(default_factory=dict)
     latest_messages: Dict[ValidatorIndex, LatestMessage] = field(default_factory=dict)
+    unrealized_justifications: Dict[Root, Checkpoint] = field(default_factory=dict)
 ```
+
+<!-- NOTES-BEGIN -->
 
 The member variables here are as follows:
 
@@ -170,32 +227,44 @@ Note that in reality, instead of storing the post-states of all blocks and check
 
 #### `get_forkchoice_store`
 
-This function initializes the `store` given a particular block that the fork choice would start from. This should be the most recent finalized block that the client knows about from extra-protocol sources; at the beginning, it would just be the genesis.
+The provided anchor-state will be regarded as a trusted state, to not roll back
+beyond. This should be the genesis state for a full client.
 
-*Note* With regards to fork choice, block headers are interchangeable with blocks. The spec is likely to move to headers for reduced overhead in test vectors and better encapsulation. Full implementations store blocks as part of their database and will often use full blocks when dealing with production fork choice.
-
-_The block for `anchor_root` is incorrectly initialized to the block header, rather than the full block. This does not affect functionality but will be cleaned up in subsequent releases._
+*Note* With regards to fork choice, block headers are interchangeable with
+blocks. The spec is likely to move to headers for reduced overhead in test
+vectors and better encapsulation. Full implementations store blocks as part of
+their database and will often use full blocks when dealing with production fork
+choice.
 
 ```python
-def get_forkchoice_store(anchor_state: BeaconState) -> Store:
-    anchor_block_header = copy(anchor_state.latest_block_header)
-    if anchor_block_header.state_root == Bytes32():
-        anchor_block_header.state_root = hash_tree_root(anchor_state)
-    anchor_root = hash_tree_root(anchor_block_header)
+def get_forkchoice_store(anchor_state: BeaconState, anchor_block: BeaconBlock) -> Store:
+    assert anchor_block.state_root == hash_tree_root(anchor_state)
+    anchor_root = hash_tree_root(anchor_block)
     anchor_epoch = get_current_epoch(anchor_state)
     justified_checkpoint = Checkpoint(epoch=anchor_epoch, root=anchor_root)
     finalized_checkpoint = Checkpoint(epoch=anchor_epoch, root=anchor_root)
+    proposer_boost_root = Root()
     return Store(
         time=uint64(anchor_state.genesis_time + SECONDS_PER_SLOT * anchor_state.slot),
         genesis_time=anchor_state.genesis_time,
         justified_checkpoint=justified_checkpoint,
         finalized_checkpoint=finalized_checkpoint,
-        best_justified_checkpoint=justified_checkpoint,
-        blocks={anchor_root: anchor_block_header},
+        unrealized_justified_checkpoint=justified_checkpoint,
+        unrealized_finalized_checkpoint=finalized_checkpoint,
+        proposer_boost_root=proposer_boost_root,
+        equivocating_indices=set(),
+        blocks={anchor_root: copy(anchor_block)},
         block_states={anchor_root: copy(anchor_state)},
         checkpoint_states={justified_checkpoint: copy(anchor_state)},
+        unrealized_justifications={anchor_root: justified_checkpoint},
     )
 ```
+
+<!-- NOTES-BEGIN -->
+
+This function initializes the `store` given a particular block that the fork choice would start from. This should be the most recent finalized block that the client knows about from extra-protocol sources; at the beginning, it would just be the genesis.
+
+_The block for `anchor_root` is incorrectly initialized to the block header, rather than the full block. This does not affect functionality but will be cleaned up in subsequent releases._
 
 #### `get_slots_since_genesis`
 
@@ -218,6 +287,8 @@ def compute_slots_since_epoch_start(slot: Slot) -> int:
     return slot - compute_start_slot_at_epoch(compute_epoch_at_slot(slot))
 ```
 
+<!-- NOTES-BEGIN -->
+
 Compute which slot of the current epoch we are in (returns 0...31).
 
 #### `get_ancestor`
@@ -227,12 +298,10 @@ def get_ancestor(store: Store, root: Root, slot: Slot) -> Root:
     block = store.blocks[root]
     if block.slot > slot:
         return get_ancestor(store, block.parent_root, slot)
-    elif block.slot == slot:
-        return root
-    else:
-        # root is older than queried slot, thus a skip slot. Return most recent root prior to slot
-        return root
+    return root
 ```
+
+<!-- NOTES-BEGIN -->
 
 Get the ancestor of block `root` (we refer to all blocks by their root in the fork choice spec) at the given `slot` (eg. if `root` was at slot 105 and `slot = 100`, and the chain has no skipped slots in between, it would return the block's fifth ancestor).
 
@@ -257,6 +326,59 @@ In this diagram, we assume that each of the last five block proposals (the blue 
 
 #### `filter_block_tree`
 
+*Note*: External calls to `filter_block_tree` (i.e., any calls that are not made
+by the recursive logic in this function) MUST set `block_root` to
+`store.justified_checkpoint.root`.
+
+```python
+def filter_block_tree(store: Store, block_root: Root, blocks: Dict[Root, BeaconBlock]) -> bool:
+    block = store.blocks[block_root]
+    children = [
+        root for root in store.blocks.keys() if store.blocks[root].parent_root == block_root
+    ]
+
+    # If any children branches contain expected finalized/justified checkpoints,
+    # add to filtered block-tree and signal viability to parent.
+    if any(children):
+        filter_block_tree_result = [filter_block_tree(store, child, blocks) for child in children]
+        if any(filter_block_tree_result):
+            blocks[block_root] = block
+            return True
+        return False
+
+    current_epoch = get_current_store_epoch(store)
+    voting_source = get_voting_source(store, block_root)
+
+    # The voting source should be either at the same height as the store's justified checkpoint or
+    # not more than two epochs ago
+    correct_justified = (
+        store.justified_checkpoint.epoch == GENESIS_EPOCH
+        or voting_source.epoch == store.justified_checkpoint.epoch
+        or voting_source.epoch + 2 >= current_epoch
+    )
+
+    finalized_checkpoint_block = get_checkpoint_block(
+        store,
+        block_root,
+        store.finalized_checkpoint.epoch,
+    )
+
+    correct_finalized = (
+        store.finalized_checkpoint.epoch == GENESIS_EPOCH
+        or store.finalized_checkpoint.root == finalized_checkpoint_block
+    )
+
+    # If expected finalized/justified, add to viable block-tree and signal viability to parent.
+    if correct_justified and correct_finalized:
+        blocks[block_root] = block
+        return True
+
+    # Otherwise, branch not viable
+    return False
+```
+
+<!-- NOTES-BEGIN -->
+
 Here, we implement an important but subtle deviation from the "LMD GHOST starting from the latest justified block" rule mentioned above. To motivate this deviation, consider the following attack:
 
 * There exists a justified block B, with two descendants, C1 and C2
@@ -270,46 +392,7 @@ The fix is the following. We restrict the fork choice to only looking at descend
 
 See [section 4.6 of the Gasper paper](https://arxiv.org/pdf/2003.03052.pdf) for more details.
 
-```python
-def filter_block_tree(store: Store, block_root: Root, blocks: Dict[Root, BeaconBlock]) -> bool:
-    block = store.blocks[block_root]
-    children = [
-        root for root in store.blocks.keys()
-        if store.blocks[root].parent_root == block_root
-    ]
-
-    # If any children branches contain expected finalized/justified checkpoints,
-    # add to filtered block-tree and signal viability to parent.
-    if any(children):
-        filter_block_tree_result = [filter_block_tree(store, child, blocks) for child in children]
-        if any(filter_block_tree_result):
-            blocks[block_root] = block
-            return True
-        return False
-
-    # If leaf block, check finalized/justified checkpoints as matching latest.
-    head_state = store.block_states[block_root]
-
-    correct_justified = (
-        store.justified_checkpoint.epoch == GENESIS_EPOCH
-        or head_state.current_justified_checkpoint == store.justified_checkpoint
-    )
-    correct_finalized = (
-        store.finalized_checkpoint.epoch == GENESIS_EPOCH
-        or head_state.finalized_checkpoint == store.finalized_checkpoint
-    )
-    # If expected finalized/justified, add to viable block-tree and signal viability to parent.
-    if correct_justified and correct_finalized:
-        blocks[block_root] = block
-        return True
-
-    # Otherwise, branch not viable
-    return False
-```
-
 #### `get_filtered_block_tree`
-
-`filter_block_tree` above is an impure function; it takes as input a key/value dict, which it passes along to its recursive calls to fill in the dict. `get_filtered_block_tree` is a pure function that wraps around it. Additionally, instead of requiring the `root` to be passed as an explicit argument, it gets the justified checkpoint directly from the `store` (which contains, among other things, the full block tree).
 
 ```python
 def get_filtered_block_tree(store: Store) -> Dict[Root, BeaconBlock]:
@@ -323,9 +406,11 @@ def get_filtered_block_tree(store: Store) -> Dict[Root, BeaconBlock]:
     return blocks
 ```
 
-#### `get_head`
+<!-- NOTES-BEGIN -->
 
-The main fork choice rule function: gets the head of the chain.
+`filter_block_tree` above is an impure function; it takes as input a key/value dict, which it passes along to its recursive calls to fill in the dict. `get_filtered_block_tree` is a pure function that wraps around it. Additionally, instead of requiring the `root` to be passed as an explicit argument, it gets the justified checkpoint directly from the `store` (which contains, among other things, the full block tree).
+
+#### `get_head`
 
 ```python
 def get_head(store: Store) -> Root:
@@ -333,17 +418,18 @@ def get_head(store: Store) -> Root:
     blocks = get_filtered_block_tree(store)
     # Execute the LMD-GHOST fork choice
     head = store.justified_checkpoint.root
-    justified_slot = compute_start_slot_at_epoch(store.justified_checkpoint.epoch)
     while True:
-        children = [
-            root for root in blocks.keys()
-            if blocks[root].parent_root == head and blocks[root].slot > justified_slot
-        ]
+        children = [root for root in blocks.keys() if blocks[root].parent_root == head]
         if len(children) == 0:
             return head
         # Sort by latest attesting balance with ties broken lexicographically
-        head = max(children, key=lambda root: (get_latest_attesting_balance(store, root), root))
+        # Ties broken by favoring block with lexicographically higher root
+        head = max(children, key=lambda root: (get_weight(store, root), root))
 ```
+
+<!-- NOTES-BEGIN -->
+
+The main fork choice rule function: gets the head of the chain.
 
 This follows the following procedure:
 
@@ -390,21 +476,18 @@ See [Ryuya Nakamura's ethresear.ch post](https://ethresear.ch/t/prevention-of-bo
 
 ##### `validate_on_attestation`
 
-When a client receives an attestation (either from a block or directly on the wire), it should first perform some checks, and reject the attestation if it does not pass those checks.
-
 ```python
-def validate_on_attestation(store: Store, attestation: Attestation) -> None:
+def validate_on_attestation(store: Store, attestation: Attestation, is_from_block: bool) -> None:
     target = attestation.data.target
 
-    # Attestations must be from the current or previous epoch
-    current_epoch = compute_epoch_at_slot(get_current_slot(store))
-    # Use GENESIS_EPOCH for previous when genesis to avoid underflow
-    previous_epoch = current_epoch - 1 if current_epoch > GENESIS_EPOCH else GENESIS_EPOCH
-    # If attestation target is from a future epoch, delay consideration until the epoch arrives
-    assert target.epoch in [current_epoch, previous_epoch]
+    # If the given attestation is not from a beacon block message, we have to check the target epoch scope.
+    if not is_from_block:
+        validate_target_epoch_against_current_time(store, attestation)
+
+    # Check that the epoch number and slot number are matching
     assert target.epoch == compute_epoch_at_slot(attestation.data.slot)
 
-    # Attestations target be for a known block. If target block is unknown, delay consideration until the block is found
+    # Attestation target must be for a known block. If target block is unknown, delay consideration until block is found
     assert target.root in store.blocks
 
     # Attestations must be for a known block. If block is unknown, delay consideration until the block is found
@@ -413,13 +496,18 @@ def validate_on_attestation(store: Store, attestation: Attestation) -> None:
     assert store.blocks[attestation.data.beacon_block_root].slot <= attestation.data.slot
 
     # LMD vote must be consistent with FFG vote target
-    target_slot = compute_start_slot_at_epoch(target.epoch)
-    assert target.root == get_ancestor(store, attestation.data.beacon_block_root, target_slot)
+    assert target.root == get_checkpoint_block(
+        store, attestation.data.beacon_block_root, target.epoch
+    )
 
     # Attestations can only affect the fork choice of subsequent slots.
     # Delay consideration in the fork choice until their slot is in the past.
     assert get_current_slot(store) >= attestation.data.slot + 1
 ```
+
+<!-- NOTES-BEGIN -->
+
+When a client receives an attestation (either from a block or directly on the wire), it should first perform some checks, and reject the attestation if it does not pass those checks.
 
 We do the following checks:
 
@@ -441,18 +529,27 @@ def store_target_checkpoint_state(store: Store, target: Checkpoint) -> None:
         store.checkpoint_states[target] = base_state
 ```
 
+<!-- NOTES-BEGIN -->
+
 Update the `checkpoint_states` dict, which is a convenience dict that stores the end-of-epoch states for each checkpoint. Most of the time, this is the same as the post-state of the last block in an epoch, but in the case where there are skipped slots, the state would need to process through the empty slots first. See the [Store definition](#Store) for more details.
 
 ##### `update_latest_messages`
 
 ```python
-def update_latest_messages(store: Store, attesting_indices: Sequence[ValidatorIndex], attestation: Attestation) -> None:
+def update_latest_messages(
+    store: Store, attesting_indices: Sequence[ValidatorIndex], attestation: Attestation
+) -> None:
     target = attestation.data.target
     beacon_block_root = attestation.data.beacon_block_root
-    for i in attesting_indices:
+    non_equivocating_attesting_indices = [
+        i for i in attesting_indices if i not in store.equivocating_indices
+    ]
+    for i in non_equivocating_attesting_indices:
         if i not in store.latest_messages or target.epoch > store.latest_messages[i].epoch:
             store.latest_messages[i] = LatestMessage(epoch=target.epoch, root=beacon_block_root)
 ```
+
+<!-- NOTES-BEGIN -->
 
 In the latest messages dict, update the latest message of each validator who participated in the given attestation.
 
@@ -462,19 +559,16 @@ In the latest messages dict, update the latest message of each validator who par
 
 ```python
 def on_tick(store: Store, time: uint64) -> None:
-    previous_slot = get_current_slot(store)
-
-    # update store time
-    store.time = time
-
-    current_slot = get_current_slot(store)
-    # Not a new epoch, return
-    if not (current_slot > previous_slot and compute_slots_since_epoch_start(current_slot) == 0):
-        return
-    # Update store.justified_checkpoint if a better checkpoint is known
-    if store.best_justified_checkpoint.epoch > store.justified_checkpoint.epoch:
-        store.justified_checkpoint = store.best_justified_checkpoint
+    # If the ``store.time`` falls behind, while loop catches up slot by slot
+    # to ensure that every previous slot is processed with ``on_tick_per_slot``
+    tick_slot = (time - store.genesis_time) // SECONDS_PER_SLOT
+    while get_current_slot(store) < tick_slot:
+        previous_time = store.genesis_time + (get_current_slot(store) + 1) * SECONDS_PER_SLOT
+        on_tick_per_slot(store, previous_time)
+    on_tick_per_slot(store, time)
 ```
+
+<!-- NOTES-BEGIN -->
 
 This function runs on each tick (ie. per second). At the end of each epoch, update the justified checkpoint used in the fork choice.
 
@@ -487,46 +581,51 @@ def on_block(store: Store, signed_block: SignedBeaconBlock) -> None:
     assert block.parent_root in store.block_states
     # Make a copy of the state to avoid mutability issues
     pre_state = copy(store.block_states[block.parent_root])
-    # Blocks cannot be in the future. If they are, their consideration must be delayed until the are in the past.
+    # Blocks cannot be in the future. If they are, their consideration must be delayed until they are in the past.
     assert get_current_slot(store) >= block.slot
 
     # Check that block is later than the finalized epoch slot (optimization to reduce calls to get_ancestor)
     finalized_slot = compute_start_slot_at_epoch(store.finalized_checkpoint.epoch)
     assert block.slot > finalized_slot
     # Check block is a descendant of the finalized block at the checkpoint finalized slot
-    assert get_ancestor(store, block.parent_root, finalized_slot) == store.finalized_checkpoint.root
+    finalized_checkpoint_block = get_checkpoint_block(
+        store,
+        block.parent_root,
+        store.finalized_checkpoint.epoch,
+    )
+    assert store.finalized_checkpoint.root == finalized_checkpoint_block
 
     # Check the block is valid and compute the post-state
-    state = state_transition(pre_state, signed_block, True)
+    state = pre_state.copy()
+    block_root = hash_tree_root(block)
+    state_transition(state, signed_block, True)
     # Add new block to the store
-    store.blocks[hash_tree_root(block)] = block
+    store.blocks[block_root] = block
     # Add new state for this block to the store
-    store.block_states[hash_tree_root(block)] = state
+    store.block_states[block_root] = state
 
-    # Update justified checkpoint
-    if state.current_justified_checkpoint.epoch > store.justified_checkpoint.epoch:
-        if state.current_justified_checkpoint.epoch > store.best_justified_checkpoint.epoch:
-            store.best_justified_checkpoint = state.current_justified_checkpoint
-        if should_update_justified_checkpoint(store, state.current_justified_checkpoint):
-            store.justified_checkpoint = state.current_justified_checkpoint
+    # Add block timeliness to the store
+    seconds_since_genesis = store.time - store.genesis_time
+    time_into_slot_ms = seconds_to_milliseconds(seconds_since_genesis) % SLOT_DURATION_MS
+    epoch = get_current_store_epoch(store)
+    attestation_threshold_ms = get_attestation_due_ms(epoch)
+    is_before_attesting_interval = time_into_slot_ms < attestation_threshold_ms
+    is_timely = get_current_slot(store) == block.slot and is_before_attesting_interval
+    store.block_timeliness[hash_tree_root(block)] = is_timely
 
-    # Update finalized checkpoint
-    if state.finalized_checkpoint.epoch > store.finalized_checkpoint.epoch:
-        store.finalized_checkpoint = state.finalized_checkpoint
+    # Add proposer score boost if the block is timely and not conflicting with an existing block
+    is_first_block = store.proposer_boost_root == Root()
+    if is_timely and is_first_block:
+        store.proposer_boost_root = hash_tree_root(block)
 
-        # Potentially update justified if different from store
-        if store.justified_checkpoint != state.current_justified_checkpoint:
-            # Update justified if new justified is later than store justified
-            if state.current_justified_checkpoint.epoch > store.justified_checkpoint.epoch:
-                store.justified_checkpoint = state.current_justified_checkpoint
-                return
+    # Update checkpoints in store if necessary
+    update_checkpoints(store, state.current_justified_checkpoint, state.finalized_checkpoint)
 
-            # Update justified if store justified is not in chain with finalized checkpoint
-            finalized_slot = compute_start_slot_at_epoch(store.finalized_checkpoint.epoch)
-            ancestor_at_finalized_slot = get_ancestor(store, store.justified_checkpoint.root, finalized_slot)
-            if ancestor_at_finalized_slot != store.finalized_checkpoint.root:
-                store.justified_checkpoint = state.current_justified_checkpoint
+    # Eagerly compute unrealized justification and finality
+    compute_pulled_up_tip(store, block_root)
 ```
+
+<!-- NOTES-BEGIN -->
 
 Upon receiving a block, first, do a few checks:
 
@@ -542,14 +641,15 @@ If the received block knows about a finalized checkpoint with a higher epoch num
 #### `on_attestation`
 
 ```python
-def on_attestation(store: Store, attestation: Attestation) -> None:
+def on_attestation(store: Store, attestation: Attestation, is_from_block: bool = False) -> None:
     """
     Run ``on_attestation`` upon receiving a new ``attestation`` from either within a block or directly on the wire.
 
     An ``attestation`` that is asserted as invalid may be valid at a later time,
     consider scheduling it for later processing in such case.
     """
-    validate_on_attestation(store, attestation)
+    validate_on_attestation(store, attestation, is_from_block)
+
     store_target_checkpoint_state(store, attestation.data.target)
 
     # Get state at the `target` to fully validate attestation
@@ -560,6 +660,8 @@ def on_attestation(store: Store, attestation: Attestation) -> None:
     # Update latest messages for attesting indices
     update_latest_messages(store, indexed_attestation.attesting_indices, attestation)
 ```
+
+<!-- NOTES-BEGIN -->
 
 Called upon receiving an attestation. This function simply combines together the helper functions above:
 
