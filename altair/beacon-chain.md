@@ -71,7 +71,7 @@ Altair is the first beacon chain hard fork. Its main features are:
 
 <!-- NOTES-BEGIN -->
 
-Altair is the first hard fork of the Ethereum beacon chain. Its main features are:
+Its main features in detail are:
 
 * "**Sync committees**", which allow light clients to easily sync up with the header chain with very low computational and data cost. The goal is to make a light client easy and efficient enough that it can be run inside any environment (mobile device, embedded hardware, browser extension, and even inside another smart-contract-capable blockchain)
 * **Incentive accounting reforms**. This includes a few changes:
@@ -200,6 +200,8 @@ This patch updates a few configuration values to move penalty parameters closer 
 The sync committee is set to 512 validators, a relatively large and conservative size (compared to attestation and later shard proposal committees) to ensure safety. A sync committee is chosen once every ~1 day. Shorter periods would increase data load on light clients as they would need to sync more frequently, and longer periods would leave open too much opportunity to discover and corrupt committee members; ~1 day was chosen as the happy medium that fares reasonably well on both dimensions.
 
 ### Misc
+
+**See [the sync protocol spec](./sync-protocol.md) for a description of what sync committees are and how the light client sync protocol works.**
 
 | Name | Value |
 | - | - |
@@ -406,6 +408,15 @@ def get_next_sync_committee(state: BeaconState) -> SyncCommittee:
 
 This function computes a `SyncCommittee` object, which is an SSZ representation of the public keys contained in a sync committee. It contains the pubkey of each member of the sync committee, plus an aggregate (the sum of all the pubkeys) to make signature verification easier in that case where almost everyone participates in a sync committee signature and so you only need to subtract out a few non-participants to generate the group public key.
 
+``SyncCommittee`` contains an aggregate pubkey that enables
+resource-constrained clients to save some computation when verifying
+the sync committee's signature.
+``SyncCommittee`` can also contain duplicate pubkeys, when ``get_next_sync_committee_indices``
+returns duplicate indices. Implementations must take care when handling
+optimizations relating to aggregation and verification in the presence of duplicates.
+Note: This function should only be called at sync committee period boundaries by ``process_sync_committee_updates``
+as ``get_next_sync_committee_indices`` is not stable within a given period.
+
 #### `get_base_reward_per_increment`
 
 ```python
@@ -440,6 +451,10 @@ def get_base_reward(state: BeaconState, index: ValidatorIndex) -> Gwei:
     increments = state.validators[index].effective_balance // EFFECTIVE_BALANCE_INCREMENT
     return Gwei(increments * get_base_reward_per_increment(state))
 ```
+
+Note: A validator can optimally earn one base reward per epoch over a long time horizon.
+This takes into account both per-epoch (e.g. attestation) and intermittent duties (e.g. block proposal
+and sync committees).
 
 #### `get_unslashed_participating_indices`
 
@@ -577,6 +592,9 @@ def get_inactivity_penalty_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], S
 ```
 
 <!-- NOTES-BEGIN -->
+
+*Note*: The function `get_inactivity_penalty_deltas` is modified in the selection of matching target indices
+and the removal of `BASE_REWARDS_PER_EPOCH`.
 
 The way that the inactivity leak works in Altair has been significantly reformed. The most significant reform is that pre-Altair the inactivity leak for a validator in a given epoch was proportional to a _global_ variable equal to the number of epochs since the last time the chain finalized, whereas post-Altair the inactivity leak in a given epoch is proportional to a _per-validator_ variable called the _inactivity score_.
 
@@ -871,6 +889,10 @@ def process_inactivity_updates(state: BeaconState) -> None:
                 INACTIVITY_SCORE_RECOVERY_RATE, state.inactivity_scores[index]
             )
 ```
+
+<!-- NOTES-BEGIN -->
+
+See [here](#modified-get_inactivity_penalty_deltas) for what this function is doing and how it is used.
 
 #### Rewards and penalties
 

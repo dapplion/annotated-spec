@@ -41,6 +41,39 @@
 This document is the beacon chain fork choice spec, part of Phase 0. It assumes
 the [beacon chain state transition function spec](./beacon-chain.md).
 
+<!-- NOTES-BEGIN -->
+
+It describes the mechanism for how to choose what is the "canonical" chain in the event that there are multiple conflicting versions of the chain to choose from. All blockchains have the possibility of temporary disagreement, either because of malicious behavior (eg. a block proposer publishing two different blocks at the same time), or just network latency (eg. a block being delayed by a few seconds, causing it to be broadcasted around the same time as the _next_ block that gets published by someone else). In such cases, some mechanism is needed to choose which of the two (or more) chains represents the "actual" history and state of the system (this chain is called the **canonical chain**).
+
+PoW chains (Bitcoin, Ethereum 1.0, etc) typically use some variant of the **longest chain rule**: if there is a disagreement between chains, pick the chain that is the longest.
+
+![](https://vitalik.ca/files/posts_files/cbc-casper-files/Chain3.png)
+
+In practice, "[total difficulty](https://ethereum.stackexchange.com/questions/7068/difficulty-and-total-difficulty)" is used instead of length, though for most intuitive analysis, thinking about length is typically sufficient. PoS chains can also use the longest chain rule; however, PoS opens the door to much better fork choice rules that provide much stronger properties than the longest chain rule.
+
+The fork choice rule can be viewed as being part of the **consensus algorithm**, the other part of the consensus algorithm being the rules that determine what messages each participant should send to the network (see the [honest validator doc](https://github.com/ethereum/eth2.0-specs/blob/dev/specs/phase0/validator.md#beacon-chain-responsibilities) for more info). In eth2, the consensus algorithm is Casper FFG + LMD GHOST, sometimes called [Gasper](https://arxiv.org/abs/2003.03052).
+
+* See here for the original paper describing Casper FFG: https://arxiv.org/abs/1710.09437
+* See here for a description of LMD GHOST (ignore the section on detecting finality, as that is specific to Casper CBC, whereas the fork choice rule is shared between CBC and FFG): https://vitalik.ca/general/2018/12/05/cbc_casper.html
+
+The goal of Casper FFG and LMD GHOST is to combine together the benefits of two major types of PoS design: **longest-chain-based** (or Nakamoto-based), as used by Peercoin, NXT, [Ouroboros](https://cardano.org/ouroboros/) and many other designs, and **traditional BFT based**, as used by [Tendermint](https://tendermint.com/docs/introduction/what-is-tendermint.html) and others. Longest chain systems have the benefit that they are low-overhead, even with a very high number of participants. Traditional BFT systems have the key benefit that they have a concept of **finality**: once a block is **finalized**, it can no longer be reverted, no matter what other participants in the network do. If >1/3 of participants in the network behave maliciously, different nodes could be tricked into accepting different conflicting blocks as finalized. However, to cause such a situation, those participants would have to misbehave in a very unambiguous and provable way, allowing them to be **slashed** (all their coins are taken away as a penalty), making attacks extremely expensive. Additionally, traditional BFT systems reach finality quickly, though at the cost of high overhead and a low maximum participant count.
+
+Eth2 combines together the advantages of both. It includes a traditional-BFT-inspired finality system (Casper FFG), though running at a rate of ~13 minutes per cycle (note: time to finality = 2 epochs = 2 * 32 * 12 sec) instead of a few seconds per cycle, allowing potentially over a million participants. To progress the chain between these epochs, LMD GHOST is used.
+
+![](https://vitalik.ca/files/posts_files/cbc-casper-files/Chain7.png)
+
+The core idea of LMD GHOST is that at each fork, instead of choosing the side that contains a longer chain, we choose the side that has more total support from validators, counting only the most recent message of each validator as support. This is heavily inspired by [Zohar and Sompolinsky's original GHOST paper](https://eprint.iacr.org/2013/881), but it adapts the design from its original PoW context to our new PoS context. LMD GHOST is powerful because it easily generalizes to much more than one "vote" being sent in parallel.
+
+This is a very valuable feature for us because Casper FFG [already requires every validator](https://github.com/ethereum/annotated-spec/blob/master/phase0/beacon-chain.md#how-does-eth2-proof-of-stake-work) to send one attestation per epoch, meaning that hundreds of attestations are already being sent every second. We piggyback on those messages and ask them to include additional information voting on the current head of the chain. The result of this is that when a block is published, within seconds there are hundreds of signed messages from validators (**attestations**) confirming the block, and after even one slot (12 seconds) it's very difficult to revert a block. Anyone seeking even stronger ironclad confirmation can simply wait for finality after two epochs (~12 minutes).
+
+The approximate approach that we take to combining Casper FFG and LMD GHOST is:
+
+1. Use the Casper FFG rules to compute finalized blocks. If a block becomes finalized, all future canonical chains must pass through this block.
+2. Use the Casper FFG rules to keep track of the **latest justified checkpoint** (LJC) that is a descendant of the latest accepted finalized checkpoint.
+3. Use the LMD GHOST rules, starting from the LJC as root, to compute the chain head.
+
+This combination of steps, particularly rule (2), is implemented to ensure that new blocks that validators create by following the rules actually will continually finalize new blocks with Casper FFG, even if temporary exceptional situations (eg. involving attacks or extremely high network latency) take place.
+
 ### Checkpoints vs blocks
 
 Note also that Casper FFG deals with **checkpoints** and the **checkpoint tree**, whereas LMD GHOST deals with blocks and the **block tree**. One simple way to think about this is that the checkpoint tree is a compressed version of the block tree, where we only consider blocks at the start of an epoch, and where checkpoint A is a parent of checkpoint B if block A is the ancestor of B in the block tree that begins the epoch before B:
@@ -106,6 +139,10 @@ handlers must not modify `store`.
    computation, space, or any other resource. A number of optimized alternatives
    can be found [here](https://github.com/protolambda/lmd-ghost).
 
+<!-- NOTES-BEGIN -->
+
+One important thing to note is that the fork choice _is not a pure function_; that is, what you accept as a canonical chain does not depend just on what data you also have, but also when you received it. The main reason this is done is to enforce finality: if you accept a block as finalized, then you will never revert it, even if you later see a conflicting block as finalized. Such a situation would only happen in cases where there is an active >1/3 attack on the chain; in such cases, we expect extra-protocol measures to be required to get all clients back on the same chain. There are also other deviations from purity, particularly a "sticky" choice of the latest justified block, where the latest justified block can only change near the beginning of an epoch; this is done to prevent certain kinds of "bouncing attacks".
+
 ### Configuration
 
 | Name                                  | Value         |
@@ -120,6 +157,10 @@ handlers must not modify `store`.
   `calculate_committee_fraction`.
 
 ### Helpers
+
+<!-- NOTES-BEGIN -->
+
+Here, we define the data structure for the `store`. It only has one new subtype, the `LatestMessage` (the vote in the latest [meaning highest-epoch] valid attestation received from a validator).
 
 #### `LatestMessage`
 
@@ -168,6 +209,22 @@ class Store(object):
     unrealized_justifications: Dict[Root, Checkpoint] = field(default_factory=dict)
 ```
 
+<!-- NOTES-BEGIN -->
+
+The member variables here are as follows:
+
+* `time`: the current time
+* `genesis_time`: the time of the genesis block of the chain
+* `justified_checkpoint`: the Casper FFG justified checkpoint that is used as the root of the LMD GHOST fork choice
+* `finalized_checkpoint`: the last finalized checkpoint; this block and its ancestors cannot be reverted
+* `best_justified_checkpoint`: the justified checkpoint that we will switch to at the start of the next epoch (see [this section](#should_update_justified_checkpoint) for why we store this variable temporarily and only switch over the `justified_checkpoint` at the start of the next epoch)
+* `blocks`: all blocks that we know about. Note that each `Block` contains a `parent_root`, so this contains the full "block tree" so we can get parents and children for any block
+* `block_states`: the post-state of every block that we know about. We need this for a few reasons: (i) to verify any new incoming block that claims that block as a parent, (ii) to be able to get the current and previous justified checkpoint of a block when running `filter_block_tree`, and (iii) to compute the end-of-epoch checkpoint states.
+* `checkpoint_states`: the post-state of every checkpoint. This could be different from the post-state of the block referenced by the checkpoint in the case where there are skipped slots; one would need to run the state transition function through the empty slots to get to the end-of-epoch state. Note particularly the extreme case where there is more than an entire epoch of skipped slots between a block and its child, so there are _multiple_ checkpoints referring to that block, with different epoch numbers and different states.
+* `latest_messages`: the latest epoch and block voted for by each validator.
+
+Note that in reality, instead of storing the post-states of all blocks and checkpoints that they know about, clients may simply store only the latest state, opting to reprocess blocks or process a saved journal of state changes if they want to process older blocks. This sacrifices computing efficiency in exceptional cases but saves greatly on storage.
+
 #### `get_forkchoice_store`
 
 The provided anchor-state will be regarded as a trusted state, to not roll back
@@ -203,6 +260,12 @@ def get_forkchoice_store(anchor_state: BeaconState, anchor_block: BeaconBlock) -
     )
 ```
 
+<!-- NOTES-BEGIN -->
+
+This function initializes the `store` given a particular block that the fork choice would start from. This should be the most recent finalized block that the client knows about from extra-protocol sources; at the beginning, it would just be the genesis.
+
+_The block for `anchor_root` is incorrectly initialized to the block header, rather than the full block. This does not affect functionality but will be cleaned up in subsequent releases._
+
 #### `get_slots_since_genesis`
 
 ```python
@@ -224,6 +287,10 @@ def compute_slots_since_epoch_start(slot: Slot) -> int:
     return slot - compute_start_slot_at_epoch(compute_epoch_at_slot(slot))
 ```
 
+<!-- NOTES-BEGIN -->
+
+Compute which slot of the current epoch we are in (returns 0...31).
+
 #### `get_ancestor`
 
 ```python
@@ -233,6 +300,10 @@ def get_ancestor(store: Store, root: Root, slot: Slot) -> Root:
         return get_ancestor(store, block.parent_root, slot)
     return root
 ```
+
+<!-- NOTES-BEGIN -->
+
+Get the ancestor of block `root` (we refer to all blocks by their root in the fork choice spec) at the given `slot` (eg. if `root` was at slot 105 and `slot = 100`, and the chain has no skipped slots in between, it would return the block's fifth ancestor).
 
 #### `get_latest_attesting_balance`
 
@@ -306,6 +377,21 @@ def filter_block_tree(store: Store, block_root: Root, blocks: Dict[Root, BeaconB
     return False
 ```
 
+<!-- NOTES-BEGIN -->
+
+Here, we implement an important but subtle deviation from the "LMD GHOST starting from the latest justified block" rule mentioned above. To motivate this deviation, consider the following attack:
+
+* There exists a justified block B, with two descendants, C1 and C2
+* B is justified, but the evidence of these justifications somehow only got included in the C1 chain, not the C2 chain
+* The C1 chain starts off favored by the LMD GHOST fork choice. Suppose that 49% of validators attest to C1, using B as the latest justified block, as the C1 chain recognizes B as justified
+* The fork choice switches to favoring C2 for some reason (eg. the other 51% of validators attested to C2 in that epoch). C2 does not recognize B as justified (and after two epochs can't recognize B as justified as it's too late to include evidence), so some earlier block A is used as the latest justified block instead.
+
+Now, all validators see C2 as the canonical chain, and the system is stuck: for a new block to be finalized, 67% of validators must make an attestation `[A -> C2]` (or `[A -> child(C2)]`), but only 51% can do this freely; at least 16% are constrained because they already voted `[B -> C1]`, and `[A -> C2]` violates the no-double-vote rule and `[A -> child(C2)]` violates the no-surround rule. Hence, the system can only progress if 16% voluntarily slash themselves.
+
+The fix is the following. We restrict the fork choice to only looking at descendants of B that actually recognize B as their latest justified block (or more precisely, leaves in the block tree where B is their latest justified block, as well as their ancestors). A client only accepts a block B locally as a latest justified block if there is an actual descendant block that recognizes it as such, so we know there must be at least one such chain. With this fix, C2 would not even be considered a viable candidate descendant of B until it (or one of its descendants) recognizes B as justified, so the above situation would resolve by simply favoring C1.
+
+See [section 4.6 of the Gasper paper](https://arxiv.org/pdf/2003.03052.pdf) for more details.
+
 #### `get_filtered_block_tree`
 
 ```python
@@ -319,6 +405,10 @@ def get_filtered_block_tree(store: Store) -> Dict[Root, BeaconBlock]:
     filter_block_tree(store, base, blocks)
     return blocks
 ```
+
+<!-- NOTES-BEGIN -->
+
+`filter_block_tree` above is an impure function; it takes as input a key/value dict, which it passes along to its recursive calls to fill in the dict. `get_filtered_block_tree` is a pure function that wraps around it. Additionally, instead of requiring the `root` to be passed as an explicit argument, it gets the justified checkpoint directly from the `store` (which contains, among other things, the full block tree).
 
 #### `get_head`
 
@@ -336,6 +426,19 @@ def get_head(store: Store) -> Root:
         # Ties broken by favoring block with lexicographically higher root
         head = max(children, key=lambda root: (get_weight(store, root), root))
 ```
+
+<!-- NOTES-BEGIN -->
+
+The main fork choice rule function: gets the head of the chain.
+
+This follows the following procedure:
+
+1. Get the latest justified block hash, call it `B` (this is implicit in `get_filtered_block_tree`)
+2. Get the subtree of blocks rooted in `B` (done by `get_filtered_block_tree`)
+3. Filter that for blocks whose slot exceeds the slot of `B` (technically, this check is no longer necessary ever since (2) was introduced so may be removed)
+4. Walk down the tree, at each step where a block has multiple children selecting the child with the strongest support (ie. higher `get_latest_attesting_balance`)
+
+From here on below, we have the functions for _updating_ the `store`.
 
 #### `should_update_justified_checkpoint`
 
@@ -402,6 +505,18 @@ def validate_on_attestation(store: Store, attestation: Attestation, is_from_bloc
     assert get_current_slot(store) >= attestation.data.slot + 1
 ```
 
+<!-- NOTES-BEGIN -->
+
+When a client receives an attestation (either from a block or directly on the wire), it should first perform some checks, and reject the attestation if it does not pass those checks.
+
+We do the following checks:
+
+1. Check that the attestation is from either the current or the previous epoch (we ignore attestations that come too late). This is done to prevent bounce attacks (see [above](#should_update_justified_checkpoint)) from "saving up" epochs and flipping back and forth between chains many times.
+2. Check that the attestation is attesting to a block which the client has already received and verified (if it is not, the attestation may be saved for some time, in case that block is later found)
+3. Check that the attestation is attesting to a block which is at or before the slot of the attestation (ie. can't attest to future blocks)
+4. Check that the vote for the head block is consistent with the vote for the target
+5. Check that the attestation's slot itself is not in the future
+
 ##### `store_target_checkpoint_state`
 
 ```python
@@ -413,6 +528,10 @@ def store_target_checkpoint_state(store: Store, target: Checkpoint) -> None:
             process_slots(base_state, compute_start_slot_at_epoch(target.epoch))
         store.checkpoint_states[target] = base_state
 ```
+
+<!-- NOTES-BEGIN -->
+
+Update the `checkpoint_states` dict, which is a convenience dict that stores the end-of-epoch states for each checkpoint. Most of the time, this is the same as the post-state of the last block in an epoch, but in the case where there are skipped slots, the state would need to process through the empty slots first. See the [Store definition](#Store) for more details.
 
 ##### `update_latest_messages`
 
@@ -430,6 +549,10 @@ def update_latest_messages(
             store.latest_messages[i] = LatestMessage(epoch=target.epoch, root=beacon_block_root)
 ```
 
+<!-- NOTES-BEGIN -->
+
+In the latest messages dict, update the latest message of each validator who participated in the given attestation.
+
 ### Handlers
 
 #### `on_tick`
@@ -444,6 +567,10 @@ def on_tick(store: Store, time: uint64) -> None:
         on_tick_per_slot(store, previous_time)
     on_tick_per_slot(store, time)
 ```
+
+<!-- NOTES-BEGIN -->
+
+This function runs on each tick (ie. per second). At the end of each epoch, update the justified checkpoint used in the fork choice.
 
 #### `on_block`
 
@@ -498,6 +625,19 @@ def on_block(store: Store, signed_block: SignedBeaconBlock) -> None:
     compute_pulled_up_tip(store, block_root)
 ```
 
+<!-- NOTES-BEGIN -->
+
+Upon receiving a block, first, do a few checks:
+
+1. Check that we know about the block's parent (if we don't, we can temporarily save the block in case we find the parent later)
+2. Check that the block is not from a slot that is still in the future (if it is, we can pretend to not hear about the block until time progresses to the point that the block is no longer from the future)
+3. Check that the block slot is later than the last finalized block's slot and that the block is a descendant of the last finalized block (an optimization to reduce unnecessary work from blocks that can clearly no longer possibly become canonical)
+4. Check that the block's post-state root is correct and the state transition passes
+
+We then add the block to the DB. We also update the justified and finalized checkpoints. The idea is that if the justified checkpoint known by the received block has a higher epoch number than the justified checkpoint we know about, we accept that justified checkpoint. If we are [in the first 1/3](#should_update_justified_checkpoint) of an epoch, we accept it immediately, otherwise, we put it in `store.best_justified_checkpoint` so it can be updated into `store.justified_checkpoint` [at the end](#on_tick) of the epoch.
+
+If the received block knows about a finalized checkpoint with a higher epoch number than what we know about, we accept it, and we also immediately update the justified checkpoint if either (i) the justified checkpoint provided in the block is more recent than the one we know about, or (ii) the one we know about is not compatible with the new finalized block. Note that there is a theoretical possibility that condition (ii) causes the justified checkpoint to go backward (change from a later epoch to an earlier epoch), but for this to happen, there would need to be a finalized block B with a justified child B', with a justified block A' on a conflicting chain pointing to some earlier finalized block A, which implies a slashable 1/3 attack due to the no-surround rule. In such a case, anyone who referenced A' as an LJB may not be able to build on top of B', so some validators who participated in the "wrong chain" may need to suffer some level of inactivity leak.
+
 #### `on_attestation`
 
 ```python
@@ -521,3 +661,11 @@ def on_attestation(store: Store, attestation: Attestation, is_from_block: bool =
     update_latest_messages(store, indexed_attestation.attesting_indices, attestation)
 ```
 
+<!-- NOTES-BEGIN -->
+
+Called upon receiving an attestation. This function simply combines together the helper functions above:
+
+* Validate the attestation
+* Compute the state of the target checkpoint that the attestation references
+* Check that the attestation signature is valid (this requires the target state to compute the validator set)
+* Update the `latest_messages` dict.

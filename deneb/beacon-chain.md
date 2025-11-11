@@ -104,7 +104,7 @@ Deneb is a consensus-layer upgrade containing a number of features. Including:
 
 <!-- NOTES-BEGIN -->
 
-Deneb is a consensus-layer upgrade containing a number of features, most notably its flagship feature: **blobs**. Blobs are a new form of data storage that can be contained in transactions, like calldata. However, blobs have two key differences from calldata:
+Deneb's flagship feature is: **blobs**. Blobs are a new form of data storage that can be contained in transactions, like calldata. However, blobs have two key differences from calldata:
 
 1. **Blobs are much larger, and much cheaper per byte, than calldata**. A blob has ~127 kB of data (more precisely: 4096 elements of a prime field modulo `52435875175126190479447740508185965837690552500527637822603658699938581184513` (~1.8 * 2<sup>254</sup>), and there is a separate floating basefee and per-block limit for blobs, allowing blobs to be very cheap even if regular execution gas is expensive.
 2. **Transactions cannot access blob contents**. Instead, a transaction can only access a special type of hash (called a `VersionedHash`) of a blob.
