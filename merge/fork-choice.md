@@ -40,6 +40,8 @@ def notify_forkchoice_updated(self: ExecutionEngine, head_block_hash: Hash32, fi
 
 ## Helpers
 
+<!-- NOTES-BEGIN -->
+
 This section provides the method for computing whether or not a PoW execution block referenced as a parent of the first embedded block is a valid terminal block. In addition for simply checking that the terminal PoW block is available and has been validated by the execution client, which the [post-merge beacon chain spec](./beacon-chain.md) already does implicitly, we need to check that it's a _valid_ terminal PoW block.
 
 ### `PowBlock`
@@ -54,11 +56,11 @@ class PowBlock(Container):
 
 ### `get_pow_block`
 
+<!-- NOTES-BEGIN -->
+
 Let `get_pow_block(block_hash: Hash32) -> PowBlock` be the function that given the hash of the PoW block returns its data.
 
 ### `is_valid_terminal_pow_block`
-
-There are two ways in which a block can be a valid terminal PoW block. First (and this is the normal case), it could be a PoW block that reaches the `TERMINAL_TOTAL_DIFFICULTY`. Note that only blocks _immediately_ past the `TERMINAL_TOTAL_DIFFICULTY` threshold (so, blocks whose parents are still below it) are allowed; this is part of a general rule that terminal PoW blocks can only have embedded execution blocks as valid children. Second (and this is an exceptional case to be configured only in the event of an attack or other emergency), the terminal PoW block can be chosen explicitly via its hash.
 
 ```python
 def is_valid_terminal_pow_block(block: PowBlock, parent: PowBlock) -> bool:
@@ -69,6 +71,10 @@ def is_valid_terminal_pow_block(block: PowBlock, parent: PowBlock) -> bool:
     is_parent_total_difficulty_valid = parent.total_difficulty < TERMINAL_TOTAL_DIFFICULTY
     return is_total_difficulty_reached and is_parent_total_difficulty_valid
 ```
+
+<!-- NOTES-BEGIN -->
+
+There are two ways in which a block can be a valid terminal PoW block. First (and this is the normal case), it could be a PoW block that reaches the `TERMINAL_TOTAL_DIFFICULTY`. Note that only blocks _immediately_ past the `TERMINAL_TOTAL_DIFFICULTY` threshold (so, blocks whose parents are still below it) are allowed; this is part of a general rule that terminal PoW blocks can only have embedded execution blocks as valid children. Second (and this is an exceptional case to be configured only in the event of an attack or other emergency), the terminal PoW block can be chosen explicitly via its hash.
 
 ## Updated fork-choice handlers
 

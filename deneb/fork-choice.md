@@ -18,6 +18,8 @@
 
 ## Introduction
 
+<!-- NOTES-BEGIN -->
+
 This is the modification of the fork choice accompanying the Deneb upgrade.
 
 The most important new change is that for a `BeaconBlock` to be accepted, the client must have verified the availability of the underlying blob data. This is specified in an abstract way, to accommodate the fact that this is handled by direct downloading today, but will be handled with data availability sampling in the future.
@@ -27,8 +29,6 @@ The most important new change is that for a `BeaconBlock` to be accepted, the cl
 ## Helpers
 
 ### Extended `PayloadAttributes`
-
-`PayloadAttributes` is extended with the parent beacon block root for EIP-4788.
 
 ```python
 @dataclass
@@ -40,16 +40,11 @@ class PayloadAttributes(object):
     parent_beacon_block_root: Root  # [New in Deneb:EIP4788]
 ```
 
+<!-- NOTES-BEGIN -->
+
+`PayloadAttributes` is extended with the parent beacon block root for EIP-4788.
+
 ### `is_data_available`
-
-*[New in Deneb:EIP4844]*
-
-The implementation of `is_data_available` will become more sophisticated during later scaling upgrades.
-Initially, verification requires every verifying actor to retrieve all matching `Blob`s and `KZGProof`s, and validate them with `verify_blob_kzg_proof_batch`.
-
-The block MUST NOT be considered valid until all valid `Blob`s have been downloaded. Blocks that have been previously validated as available SHOULD be considered available even if the associated `Blob`s have subsequently been pruned.
-
-*Note*: Extraneous or invalid Blobs (in addition to KZG expected/referenced valid blobs) received on the p2p network MUST NOT invalidate a block that is otherwise valid and available.
 
 ```python
 def is_data_available(beacon_block_root: Root, blob_kzg_commitments: Sequence[KZGCommitment]) -> bool:
@@ -62,11 +57,20 @@ def is_data_available(beacon_block_root: Root, blob_kzg_commitments: Sequence[KZ
     return verify_blob_kzg_proof_batch(blobs, blob_kzg_commitments, proofs)
 ```
 
+<!-- NOTES-BEGIN -->
+
+*[New in Deneb:EIP4844]*
+
+The implementation of `is_data_available` will become more sophisticated during later scaling upgrades.
+Initially, verification requires every verifying actor to retrieve all matching `Blob`s and `KZGProof`s, and validate them with `verify_blob_kzg_proof_batch`.
+
+The block MUST NOT be considered valid until all valid `Blob`s have been downloaded. Blocks that have been previously validated as available SHOULD be considered available even if the associated `Blob`s have subsequently been pruned.
+
+*Note*: Extraneous or invalid Blobs (in addition to KZG expected/referenced valid blobs) received on the p2p network MUST NOT invalidate a block that is otherwise valid and available.
+
 ## Updated fork-choice handlers
 
 ### `on_block`
-
-*Note*: The only modification is the addition of the blob data availability check.
 
 ```python
 def on_block(store: Store, signed_block: SignedBeaconBlock) -> None:
@@ -126,3 +130,8 @@ def on_block(store: Store, signed_block: SignedBeaconBlock) -> None:
     # Eagerly compute unrealized justification and finality.
     compute_pulled_up_tip(store, block_root)
 ```
+
+<!-- NOTES-BEGIN -->
+
+*Note*: The only modification is the addition of the blob data availability check.
+

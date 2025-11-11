@@ -63,6 +63,8 @@ _See also: the [annotated sync protocol spec](./sync-protocol.md)._
 
 ## Introduction
 
+<!-- NOTES-BEGIN -->
+
 Altair is the first hard fork of the Ethereum beacon chain. Its main features are:
 
 * "**Sync committees**", which allow light clients to easily sync up with the header chain with very low computational and data cost. The goal is to make a light client easy and efficient enough that it can be run inside any environment (mobile device, embedded hardware, browser extension, and even inside another smart-contract-capable blockchain)
@@ -72,7 +74,7 @@ Altair is the first hard fork of the Ethereum beacon chain. Its main features ar
     * Bug fixes to reward accounting (eg. giving proposers a ~1/8 share of _all_ rewards instead of just a ~1/8 share of one small piece of rewards, and ensuring that the rewards under perfect performance actually do add up to the full base reward)
 * **Penalty parameter updates**, making both inactivity leaks and slashing somewhat more punitive than pre-Altair, though still less punitive than their eventually-intended values.
 
-### Aside: validator duties, rewards and penalties
+**Aside: validator duties, rewards and penalties**
 
 One of the main conceptual reworks of Altair is redesigning how validators are rewarded and penalized to make these incentives more systematic and easy to reason about. Validators are rewarded for fulfilling **duties** - tasks that they are assigned as part of the job of being a validator. These duties come in two types:
 
@@ -112,6 +114,8 @@ There is one reward that falls outside this scheme: slashing whistleblower rewar
 | - | - | - |
 | `ParticipationFlags` | `uint8` | a succinct representation of 8 boolean participation flags |
 
+<!-- NOTES-BEGIN -->
+
 We will maintain a byte array to store which actions a validator has successfully taken during a given epoch, so that we can calculate finality and other global statistics and reward or penalize validators at the end of the epoch. Each validator gets 8 bits: 3 for each of their [**attestation duties**](#aside-validator-duties-rewards-and-penalties), and 5 not-yet-used bits for duties that may be added in the future.
 
 ## Constants
@@ -123,6 +127,8 @@ We will maintain a byte array to store which actions a validator has successfull
 | `TIMELY_HEAD_FLAG_INDEX` | `0` |
 | `TIMELY_SOURCE_FLAG_INDEX` | `1` |
 | `TIMELY_TARGET_FLAG_INDEX` | `2` |
+
+<!-- NOTES-BEGIN -->
 
 These are the positions in the `ParticipationFlags` bitfield at which we track whether or not each validator fulfilled that particular duty in the current and previous epoch.
 
@@ -137,9 +143,11 @@ These are the positions in the `ParticipationFlags` bitfield at which we track w
 | `PROPOSER_WEIGHT` | `uint64(8)` |
 | `WEIGHT_DENOMINATOR` | `uint64(64)` |
 
+<!-- NOTES-BEGIN -->
+
 Reward weights for each duty (see [here](#aside-validator-duties-rewards-and-penalties) for a more detailed description of this concept).
 
-### Aside: what is the break-even uptime?
+**Aside: what is the break-even uptime?**
 
 Assume there are two kinds of validators, (i) fully functioning online validators, and (ii) offline validators, with portion `p` fully functioning and online. Then, a fully functioning online validator's reward will be roughly `B * (50/64 * p + 14/64 * p**2)`, where `B` is the max possible reward. This can be analyzed as follows.
 
@@ -172,6 +180,8 @@ This patch updates a few configuration values to move penalty parameters closer 
 | `MIN_SLASHING_PENALTY_QUOTIENT_ALTAIR` | `uint64(2**6)` (= 64) |
 | `PROPORTIONAL_SLASHING_MULTIPLIER_ALTAIR` | `uint64(2)` |
 
+<!-- NOTES-BEGIN -->
+
 * The inactivity penalty quotient is reduced by 25% from `2**26` to `3 * 2**24`. This should reduce the time that it takes for balances to leak by ~13.4% (as time-to-leak is proportional to the _square root_ of this quotient).
 * The minimum slashing penalty quotient is decreased from 128 to 64. This quotient is the minimum fraction of your total balance that a slashed validator will lose, so this change increases the minimum slashing penalty from 0.25 ETH to 0.5 ETH
 * The proportional slashing multiplier is increased from 1 to 2, meaning that the slashing penalty will now be _double_ the percentage of other validators that were slashed within 18 days of that validator. For example, if you are slashed and within 18 days [in both directions] 7% of other validators are also slashed, pre-Altair your slashing penalty would have been 7%, post-Altair it would be 14%.
@@ -184,6 +194,8 @@ This patch updates a few configuration values to move penalty parameters closer 
 | - | - |
 | `SYNC_COMMITTEE_SIZE` | `uint64(2**9)` (= 512) |
 | `EPOCHS_PER_SYNC_COMMITTEE_PERIOD` | `Epoch(2**8)` (= 256) | epochs | ~27 hours |
+
+<!-- NOTES-BEGIN -->
 
 The sync committee is set to 512 validators, a relatively large and conservative size (compared to attestation and later shard proposal committees) to ensure safety. A sync committee is chosen once every ~1 day. Shorter periods would increase data load on light clients as they would need to sync more frequently, and longer periods would leave open too much opportunity to discover and corrupt committee members; ~1 day was chosen as the happy medium that fares reasonably well on both dimensions.
 
@@ -224,6 +236,8 @@ class BeaconBlockBody(Container):
     # [New in Altair]
     sync_aggregate: SyncAggregate
 ```
+
+<!-- NOTES-BEGIN -->
 
 The beacon block body now contains a [`SyncAggregate` object](#syncaggregate), which is a fairly standard BLS aggregate signature (a BLS signature plus a bitfield of who participated) signed by the sync committee. Note that the `SyncAggregate` would also be separately broadcasted over the wire for light clients; it's included on-chain only so that validators who contributed to the signature can be rewarded.
 
@@ -267,6 +281,8 @@ class BeaconState(Container):
     next_sync_committee: SyncCommittee  # [New in Altair]
 ```
 
+<!-- NOTES-BEGIN -->
+
 The beacon state commits to the current sync committee and the next sync committee so that light clients that have accepted a block header can easily authenticate the sync committee for the next period. Without this feature, it would be difficult to do so, as it would require a computation on the entire validator set to determine the active validator list, and even after that point require a Merkle branch for each committee member. See [the sync protocol doc](./sync-protocol.md) for more details.
 
 ### New containers
@@ -287,6 +303,8 @@ class SyncCommittee(Container):
     aggregate_pubkey: BLSPubkey
 ```
 
+<!-- NOTES-BEGIN -->
+
 We store not just each individual pubkey, but also the sum of all the pubkeys. This is done so that when sync committees have a very high level of participation, few elliptic curve additions are required to verify the signature: you can just start with the sum and _subtract out_ all the pubkeys that did not participate.
 
 ## Helper functions
@@ -304,6 +322,8 @@ def eth2_fast_aggregate_verify(pubkeys: Sequence[BLSPubkey], message: Bytes32, s
         return True
     return bls.FastAggregateVerify(pubkeys, message, signature)
 ```
+
+<!-- NOTES-BEGIN -->
 
 There are a few minor discrepancies between how the IETF BLS signature standard handles signatures and the needs of the eth2 protocol; to deal with this, in a few cases we need to wrap the IETF standard to replace its behavior with our own preferred behavior. Here, the important case is that multi-verification in the IETF standard does not support the empty signature as a valid signature for an empty aggregate, but in our use cases it's critically important to be able to support the empty case (in case no sync committee members at all get their signatures included).
 
@@ -362,6 +382,8 @@ def get_next_sync_committee_indices(state: BeaconState) -> Sequence[ValidatorInd
     return sync_committee_indices
 ```
 
+<!-- NOTES-BEGIN -->
+
 This is the core function that computes the sync committee that will be active in the epoch _after_ the current epoch. **Note that this function should ONLY be called _once_, when sync committees are updated; actually reading the sync committee for all other purposes is done with the logic in [the sync committee processing method](#sync-committee-processing)**. This function works as follows:
 
 * Compute the active validator indices at the next epoch.
@@ -393,6 +415,8 @@ def get_next_sync_committee(state: BeaconState) -> SyncCommittee:
     return SyncCommittee(pubkeys=pubkeys, aggregate_pubkey=aggregate_pubkey)
 ```
 
+<!-- NOTES-BEGIN -->
+
 This function computes a `SyncCommittee` object, which is an SSZ representation of the public keys contained in a sync committee. It contains the pubkey of each member of the sync committee, plus an aggregate (the sum of all the pubkeys) to make signature verification easier in that case where almost everyone participates in a sync committee signature and so you only need to subtract out a few non-participants to generate the group public key.
 
 #### `get_base_reward_per_increment`
@@ -401,6 +425,8 @@ This function computes a `SyncCommittee` object, which is an SSZ representation 
 def get_base_reward_per_increment(state: BeaconState) -> Gwei:
     return Gwei(EFFECTIVE_BALANCE_INCREMENT * BASE_REWARD_FACTOR // integer_squareroot(get_total_active_balance(state)))
 ```
+
+<!-- NOTES-BEGIN -->
 
 The `get_base_reward` function is being re-factored for Altair to make it cleaner. The key changes are:
 
@@ -440,6 +466,8 @@ def get_unslashed_participating_indices(state: BeaconState, flag_index: int, epo
     participating_indices = [i for i in active_validator_indices if has_flag(epoch_participation[i], flag_index)]
     return set(filter(lambda index: not state.validators[index].slashed, participating_indices))
 ```
+
+<!-- NOTES-BEGIN -->
 
 A major feature of Altair is reforming how we keep track of which validators fulfilled which duties during an epoch so we can reward them and compute finality.
 
@@ -513,6 +541,8 @@ def get_flag_index_deltas(state: BeaconState, flag_index: int, weight: uint64) -
     return rewards, penalties
 ```
 
+<!-- NOTES-BEGIN -->
+
 This function computes the rewards and penalties for fulfilling (or failing to fulfill) a particular duty. The fundamental structure is identical to pre-Altair rewards: if `X` is the maximum reward for fulfilling a duty and `p` is the portion of validators that fulfilled it, then fulfilling the duty gets you a reward of `p * X` and failing to fulfill it gets you a penalty of `X`. If an inactivity leak is active, the reward drops to `0` (ie. the benefit for fulfilling the duty during a leak is _only_ the ability to avoid penalties).
 
 The main change from pre-Altair is the `weight // WEIGHT_DENOMINATOR` factor, reflecting that the `base_reward` now refers to the maximum _total_ reward and not the maximum _per-duty_ reward as it did pre-Altair (notice that this new structure also gives us more flexibility to assign different rewards to different duties).
@@ -542,6 +572,8 @@ def get_inactivity_penalty_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], S
                 penalties[index] += Gwei(penalty_numerator // penalty_denominator)
     return rewards, penalties
 ```
+
+<!-- NOTES-BEGIN -->
 
 The way that the inactivity leak works in Altair has been significantly reformed. The most significant reform is that pre-Altair the inactivity leak for a validator in a given epoch was proportional to a _global_ variable equal to the number of epochs since the last time the chain finalized, whereas post-Altair the inactivity leak in a given epoch is proportional to a _per-validator_ variable called the _inactivity score_.
 
@@ -647,9 +679,11 @@ def process_attestation(state: BeaconState, attestation: Attestation) -> None:
     increase_balance(state, get_beacon_proposer_index(state), proposer_reward)
 ```
 
+<!-- NOTES-BEGIN -->
+
 The main difference between this code and pre-Altair code is that here we replace the pre-Altair `PendingAttestation` logic with the much cleaner `ParticipationFlags` logic.
 
-#### Aside: proposer rewards in Altair
+**Aside: proposer rewards in Altair**
 
 Note also some new special logic for the proposer rewards: the proposer reward for a duty is the attester reward for that duty, multiplied by the _proposer reward as a fraction of everything but the proposer reward_.
 
@@ -732,6 +766,8 @@ def process_sync_aggregate(state: BeaconState, aggregate: SyncAggregate) -> None
             decrease_balance(state, participant_index, participant_reward)
 ```
 
+<!-- NOTES-BEGIN -->
+
 This function verifies that the sync committee included in the block is correct, and computes and applies the rewards for participants. The signature verification logic is simple: sync committee members are expected to sign the block header, and the signing root is computed from the block header root and the domain (much like all BLS signatures in the beacon chain protocol sign messages with domains attached for anti-replay-rpotection reasons). The signature is verified against the subset of sync committee members that participated, which can be determined from the sync committee and the bitfield.
 
 There is some subtlety in correctly computing the rewards. The goal is for maximum possible total sync committee rewards to equal `2/64` of the base reward for the _total_ validator set (so that _in the long term, on average_, a perfectly participating validator gets `2/64` of the base reward per epoch for their sync committee participation. The base reward itself is per-epoch, and sync committees are per-slot, so to get the total reward per-slot, we take the total base reward and further divide it by `SLOTS_PER_EPOCH`. This gives us `max_participant_rewards`, the maximum possible combined reward to the whole sync committee in one slot.
@@ -775,6 +811,8 @@ def process_justification_and_finalization(state: BeaconState) -> None:
     current_target_balance = get_total_balance(state, current_indices)
     weigh_justification_and_finalization(state, total_active_balance, previous_target_balance, current_target_balance)
 ```
+
+<!-- NOTES-BEGIN -->
 
 The `weigh_justification_and_finalization` function, unchanged from pre-Altair, actually checks justification and finality of epochs and adds records to the state as needed. This outer `process_justification_and_finalization` function is modified to remove the pre-Altair complicated logic for computing participants from `PendingAttestation` records, and instead simply sums the balances of all validators with a 1 in the right place of their participation bitfields.
 
@@ -847,6 +885,8 @@ def process_participation_flag_updates(state: BeaconState) -> None:
     state.current_epoch_participation = [ParticipationFlags(0b0000_0000) for _ in range(len(state.validators))]
 ```
 
+<!-- NOTES-BEGIN -->
+
 This function ensures that a new participation flags array gets initialized for each new epoch, and that the array for the current epoch becomes the array for the previous epoch when appropriate. The logic is the same to the logic of how `PendingAttestation` lists were updated at epoch boundaries pre-Altair.
 
 #### Sync committee updates
@@ -860,6 +900,8 @@ def process_sync_committee_updates(state: BeaconState) -> None:
         state.current_sync_committee = state.next_sync_committee
         state.next_sync_committee = get_sync_committee(state, next_epoch + EPOCHS_PER_SYNC_COMMITTEE_PERIOD)
 ```
+
+<!-- NOTES-BEGIN -->
 
 When a new sync committee period starts, compute the committee 1 period in the future and save it in the state. Also, move the prior next committee into the position of the current committee (as with the start of a new period, the "next" committee _becomes_ the "current" committee).
 

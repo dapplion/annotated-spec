@@ -27,6 +27,8 @@
 
 ## Introduction
 
+<!-- NOTES-BEGIN -->
+
 The main addition to the "honest validator logic" is the need to handle `BlobSidecar`s, which contain the underlying data in blobs.
 
 ## Prerequisites
@@ -80,9 +82,6 @@ def compute_signed_block_header(signed_block: SignedBeaconBlock) -> SignedBeacon
 
 #### Modified `get_payload`
 
-Given the `payload_id`, `get_payload` returns the most recent version of the execution payload that
-has been built since the corresponding call to `notify_forkchoice_updated` method.
-
 ```python
 def get_payload(self: ExecutionEngine, payload_id: PayloadId) -> GetPayloadResponse:
     """
@@ -91,6 +90,11 @@ def get_payload(self: ExecutionEngine, payload_id: PayloadId) -> GetPayloadRespo
     # pylint: disable=unused-argument
     ...
 ```
+
+<!-- NOTES-BEGIN -->
+
+Given the `payload_id`, `get_payload` returns the most recent version of the execution payload that
+has been built since the corresponding call to `notify_forkchoice_updated` method.
 
 ## Beacon chain responsibilities
 
@@ -101,14 +105,6 @@ All validator responsibilities remain unchanged other than those noted below.
 #### Constructing the `BeaconBlockBody`
 
 ##### ExecutionPayload
-
-`prepare_execution_payload` is updated from the Capella specs to provide the parent beacon block root. This is a tuny change, to handle EIP-2935; it is unrelated to blobs.
-
-*Note*: In this section, `state` is the state of the slot for the block proposal _without_ the block yet applied.
-That is, `state` is the `previous_state` processed through any empty slots up to the assigned slot using `process_slots(previous_state, slot)`.
-
-*Note*: The only change made to `prepare_execution_payload` is to add the parent beacon block root as an additional
-parameter to the `PayloadAttributes`.
 
 ```python
 def prepare_execution_payload(state: BeaconState,
@@ -135,7 +131,19 @@ def prepare_execution_payload(state: BeaconState,
     )
 ```
 
+<!-- NOTES-BEGIN -->
+
+`prepare_execution_payload` is updated from the Capella specs to provide the parent beacon block root. This is a tuny change, to handle EIP-2935; it is unrelated to blobs.
+
+*Note*: In this section, `state` is the state of the slot for the block proposal _without_ the block yet applied.
+That is, `state` is the `previous_state` processed through any empty slots up to the assigned slot using `process_slots(previous_state, slot)`.
+
+*Note*: The only change made to `prepare_execution_payload` is to add the parent beacon block root as an additional
+parameter to the `PayloadAttributes`.
+
 ##### Blob KZG commitments
+
+<!-- NOTES-BEGIN -->
 
 *[New in Deneb:EIP4844]*
 
@@ -143,6 +151,8 @@ def prepare_execution_payload(state: BeaconState,
 2. Set `block.body.blob_kzg_commitments = commitments`.
 
 #### Constructing the `BlobSidecar`s
+
+<!-- NOTES-BEGIN -->
 
 *[New in Deneb:EIP4844]*
 
@@ -175,14 +185,16 @@ def get_blob_sidecars(signed_block: SignedBeaconBlock,
     ]
 ```
 
-The `subnet_id` for the `blob_sidecar` is calculated with:
-- Let `blob_index = blob_sidecar.index`.
-- Let `subnet_id = compute_subnet_for_blob_sidecar(blob_index)`.
-
 ```python
 def compute_subnet_for_blob_sidecar(blob_index: BlobIndex) -> SubnetID:
     return SubnetID(blob_index % BLOB_SIDECAR_SUBNET_COUNT)
 ```
+
+<!-- NOTES-BEGIN -->
+
+The `subnet_id` for the `blob_sidecar` is calculated with:
+- Let `blob_index = blob_sidecar.index`.
+- Let `subnet_id = compute_subnet_for_blob_sidecar(blob_index)`.
 
 After publishing the peers on the network may request the sidecar through sync-requests, or a local user may be interested.
 

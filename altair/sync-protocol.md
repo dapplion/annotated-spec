@@ -28,6 +28,8 @@
 
 ## Introduction
 
+<!-- NOTES-BEGIN -->
+
 The **sync committee** is the "flagship feature" of the Altair hard fork. This is a committee of 512 validators that is randomly selected every **sync committee period (~1 day)**, and while a validator is part of the currently active sync committee they are expected to continually sign the block header that is the new head of the chain at each slot.
 
 The purpose of the sync committee is to allow **light clients** to keep track of the chain of beacon block headers. The other two duties that involve signing block headers, block proposal and block attestation, do not work for this function because computing the proposer or attesters at a given slot requires a calculation on the entire active validator set, which light clients do not have access to (if they did, they would not be light!). Sync committees, on the other hand, are (i) updated infrequently, and (ii) saved directly in the beacon state, allowing light clients to verify the sync committee with a Merkle branch from a block header that they already know about, and use the public keys in the sync committee to directly authenticate signatures of more recent blocks.
@@ -54,6 +56,8 @@ The extremely low cost for light clients is intended to help make the beacon cha
 | `FINALIZED_ROOT_INDEX` | `get_generalized_index(BeaconState, 'finalized_checkpoint', 'root')` |
 | `NEXT_SYNC_COMMITTEE_INDEX` | `get_generalized_index(BeaconState, 'next_sync_committee')` |
 
+<!-- NOTES-BEGIN -->
+
 These values are the [generalized indices](https://github.com/ethereum/eth2.0-specs/blob/dev/ssz/merkle-proofs.md#generalized-merkle-tree-index) for the finalized checkpoint and the next sync committee in a `BeaconState`. A generalized index is a way of referring to a position of an object in a Merkle tree, so that the Merkle proof verification algorithm knows what path to check the hashes against.
 
 ## Configuration
@@ -79,6 +83,8 @@ class LightClientSnapshot(Container):
     next_sync_committee: SyncCommittee
 ```
 
+<!-- NOTES-BEGIN -->
+
 The `LightClientSnapshot` represents the light client's view of the most recent block header that the light client is convinced is securely part of the chain. The light client stores the header itself, so that the light client can then ask for Merkle branches to authenticate transactions and state against the header. The light client also stores the current and next sync committees, so that it can verify the sync committee signatures of newer proposed headers.
 
 ### `LightClientUpdate`
@@ -100,6 +106,8 @@ class LightClientUpdate(Container):
     fork_version: Version
 ```
 
+<!-- NOTES-BEGIN -->
+
 A `LightClientUpdate` is an object passed over the wire (could be over a p2p network or through a client-server setup) which contains all of the information needed to convince a light client to accept a newer block header. The information included is:
 
 * **`header`**: the header that the light client will accept if the `LightClientUpdate` is valid.
@@ -119,6 +127,8 @@ class LightClientStore(object):
     snapshot: LightClientSnapshot
     valid_updates: Set[LightClientUpdate]
 ```
+
+<!-- NOTES-BEGIN -->
 
 The `LightClientStore` is the _full_ "state" of a light client, and includes:
 
@@ -141,9 +151,13 @@ def get_subtree_index(generalized_index: GeneralizedIndex) -> uint64:
     return uint64(generalized_index % 2**(floorlog2(generalized_index)))
 ```
 
+<!-- NOTES-BEGIN -->
+
 From a generalized index, return an integer whose bits, in least-to-greatest-place-value order, represent the Merkle path (0 = "left", 1 = "right", going from bottom to top) to get from a leaf to the root of a tree. Passed into the Merkle tree verification function used in other parts of the beacon chain spec.
 
 ## Light client state updates
+
+<!-- NOTES-BEGIN -->
 
 A light client maintains its state in a `store` object of type `LightClientStore` and receives `update` objects of type `LightClientUpdate`. Every `update` triggers `process_light_client_update(store, update, current_slot)` where `current_slot` is the current slot based on some local clock.
 
@@ -199,6 +213,8 @@ def validate_light_client_update(snapshot: LightClientSnapshot,
     assert bls.FastAggregateVerify(participant_pubkeys, signing_root, update.sync_committee_signature)
 ```
 
+<!-- NOTES-BEGIN -->
+
 This function has 5 parts:
 
 1. **Basic validation**: confirm that the `update.header` is newer than the snapshot header, and that it does not skip more than 1 sync committee period.
@@ -218,6 +234,8 @@ def apply_light_client_update(snapshot: LightClientSnapshot, update: LightClient
         snapshot.next_sync_committee = update.next_sync_committee
     snapshot.header = update.header
 ```
+
+<!-- NOTES-BEGIN -->
 
 This function is called only when it is time to update that snapshot header: either (1) when a new header is provided that corresponds to a finalized checkpoint of another header, or (2) after the timeout. In addition to simply updating the header, we also update the sync committees in the snapshot.
 
@@ -245,5 +263,7 @@ def process_light_client_update(store: LightClientStore, update: LightClientUpda
                                   max(store.valid_updates, key=lambda update: sum(update.sync_committee_bits)))
         store.valid_updates = set()
 ```
+
+<!-- NOTES-BEGIN -->
 
 The main function for processing a light client update. We first validate that it is correct; if it is correct, we at the very least save it as a speculative update. We then check if one of the two conditions for updating the snapshot is satisfied; if it is, then we update the snapshot.

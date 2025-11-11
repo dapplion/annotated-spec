@@ -101,9 +101,11 @@ Public functions MUST accept raw bytes as input and perform the required cryptog
 | `KZG_SETUP_G1_LAGRANGE` | `Vector[G1Point, FIELD_ELEMENTS_PER_BLOB]` |
 | `KZG_SETUP_G2_MONOMIAL` | `Vector[G2Point, KZG_SETUP_G2_LENGTH]` |
 
+<!-- NOTES-BEGIN -->
+
 KZG commitments depend on a [trusted setup](https://vitalik.eth.limo/general/2022/03/14/trustedsetup.html) to generate elliptic curve commitments to a series of powers of a secret number `s`. That is, these points are of the form `[G1, G1 * s, G1 * s**2 ... G1 * s**4095]` and `[G2, G2 * s, G2 * s**2 ... G2 * s**64]`. Nobody knows `s`, because [over 140,000 participants](https://ceremony.ethereum.org/) mixed their randomness to produce the trusted setup, and if even one of those was honest, the trusted setup is secure.
 
-## Aside: what evaluation points are we using?
+**Aside: what evaluation points are we using?**
 
 As we mentioned above, the 4096 values in the deserialized blob are evaluations of a polynomial `P` at a set of 4096 points, and the 8192 values in the extended data are evaluations at _another_ 4096 points. But which points? Theoretically, any choice (even `0...8191`) would be valid, but some choices lead to much more efficient algorithms than others. We use **powers of a root of unity, in bit-reversal permutation**. Let's unpack this.
 
@@ -155,6 +157,8 @@ This is the entire set of values `168 + 512k` for `k = 0..15`. As another bonus,
 ## Helper functions
 
 ### Bit-reversal permutation
+
+<!-- NOTES-BEGIN -->
 
 All polynomials (which are always given in Lagrange form) should be interpreted as being in
 bit-reversal permutation. In practice, clients can implement this by storing the lists
@@ -208,6 +212,8 @@ def multi_exp(points: Sequence[TPoint],
     # pylint: disable=unused-argument
     ...
 ```
+
+<!-- NOTES-BEGIN -->
 
 Note that "multi-exponentiation", "multi-scalar multiplication" and "linear combination" all mean the same thing. Part of the reason why is that there were two separate cryptographic traditions, one of which viewed the operation to combine two elliptic curve points as being "addition", and the other which viewed it as "multiplication". "Linear combination" is a [long-established term](https://en.wikipedia.org/wiki/Linear_combination) for "take a sequence of objects, and a sequence of constants, multiply the i'th object by the i'th constant, and add the results".
 
@@ -294,13 +300,11 @@ def blob_to_polynomial(blob: Blob) -> Polynomial:
     return polynomial
 ```
 
+<!-- NOTES-BEGIN -->
+
 Note that the "polynomial" outputted by this is a list of _evaluations_, not a list of _coefficients_.
 
 #### `compute_challenge`
-
-Suppose that a client receives a blob from a `BlobSidecar`, and they want to check if it matches the KZG commitment in the `BeaconBlock`. One way to do this would be to compute the KZG commitment from the blob directly, and check if it matches. However, this is too slow to do with many blobs. Instead, we use a clever cryptographic trick. We hash the blob and the commitment to generate a random point. We require the beacon block to provide an evaluation of the polynomial at that point, along with a KZG evaluation proof. The client can then evaluate the polynomial from the blob directly, and check that the two evaluations match. This is a common random checking trick used in cryptography: to verify that two polynomials `P` and `Q` are different, choose a random `x`, and verify that `P(x) = Q(x)`. It works as long as the domain from which `x` is chosen is large enough; in this case, it is (because `BLS_MODULUS` is a 256-bit number).
-
-This function computes this challenge point `x`.
 
 ```python
 def compute_challenge(blob: Blob,
@@ -319,6 +323,12 @@ def compute_challenge(blob: Blob,
     # Transcript has been prepared: time to create the challenge
     return hash_to_bls_field(data)
 ```
+
+<!-- NOTES-BEGIN -->
+
+Suppose that a client receives a blob from a `BlobSidecar`, and they want to check if it matches the KZG commitment in the `BeaconBlock`. One way to do this would be to compute the KZG commitment from the blob directly, and check if it matches. However, this is too slow to do with many blobs. Instead, we use a clever cryptographic trick. We hash the blob and the commitment to generate a random point. We require the beacon block to provide an evaluation of the polynomial at that point, along with a KZG evaluation proof. The client can then evaluate the polynomial from the blob directly, and check that the two evaluations match. This is a common random checking trick used in cryptography: to verify that two polynomials `P` and `Q` are different, choose a random `x`, and verify that `P(x) = Q(x)`. It works as long as the domain from which `x` is chosen is large enough; in this case, it is (because `BLS_MODULUS` is a 256-bit number).
+
+This function computes this challenge point `x`.
 
 #### `bls_modular_inverse`
 
@@ -423,9 +433,13 @@ def evaluate_polynomial_in_evaluation_form(polynomial: Polynomial,
     return BLSFieldElement(result % BLS_MODULUS)
 ```
 
+<!-- NOTES-BEGIN -->
+
 Given a polynomial in evaluation form (which is what a serialized blob is), directly evaluate it at a given point `z`. It's possible to do this using the [barycentric formula](https://tobydriscoll.net/fnc-julia/globalapprox/barycentric.html), which the above function implements. It takes `O(N)` arithmetic operations.
 
 ### KZG
+
+<!-- NOTES-BEGIN -->
 
 KZG core functions. These are also defined in Deneb execution specs.
 
@@ -463,6 +477,8 @@ def verify_kzg_proof(commitment_bytes: Bytes48,
                                  bytes_to_kzg_proof(proof_bytes))
 ```
 
+<!-- NOTES-BEGIN -->
+
 This is the function that verifies a KZG proof of evaluation: if `commitment_bytes` is a commitment to `P`, it's only possible to generate a valid proof `proof_bytes` for a given `z_bytes` and `y_bytes` if `P(z) = y`.
 
 
@@ -487,6 +503,8 @@ def verify_kzg_proof_impl(commitment: KZGCommitment,
         [bls.bytes48_to_G1(proof), X_minus_z]
     ])
 ```
+
+<!-- NOTES-BEGIN -->
 
 Verifying a KZG proof requires computing an [elliptic curve pairing](https://vitalik.eth.limo/general/2017/01/14/exploring_ecp.html). Pairings with KZG commitments have the property that `e(commit(A), commit(B)) = e(commit(C), commit(1))` only if, as polynomials, `C = A * B`. The standard way to prove that `P(z) = y`, is to require a commitment to `Q = (P - y) / (X - z)`. The verifier computes `commit(X - z)` and `commit(P - y)`, and then uses a pairing to check that the product of those two equals to `Q`. Both of those commitmetns are easy to compute in O(1) time: `commit(X - z)` directly, ad `commit(P - y)` as `commit(P) - commit(y)`, where `commit(P)` was already provided. Because pairings need to take a `G1` element and a `G2` element as input, we compute `(X - z)` in G2 form.
 
@@ -536,6 +554,8 @@ def verify_kzg_proof_batch(commitments: Sequence[KZGCommitment],
         [bls.add(bls.bytes48_to_G1(C_minus_y_lincomb), bls.bytes48_to_G1(proof_z_lincomb)), bls.G2()]
     ])
 ```
+
+<!-- NOTES-BEGIN -->
 
 This is an optimized algorithm for verifying many KZG evaluation proofs at the same time.
 
@@ -631,6 +651,8 @@ def compute_blob_kzg_proof(blob: Blob, commitment_bytes: Bytes48) -> KZGProof:
     return proof
 ```
 
+<!-- NOTES-BEGIN -->
+
 See the more detailed description of what's going on in [`compute_challenge`](#compute_challenge).
 
 #### `verify_blob_kzg_proof`
@@ -660,6 +682,8 @@ def verify_blob_kzg_proof(blob: Blob,
     proof = bytes_to_kzg_proof(proof_bytes)
     return verify_kzg_proof_impl(commitment, evaluation_challenge, y, proof)
 ```
+
+<!-- NOTES-BEGIN -->
 
 See the more detailed description of what's going on in [`compute_challenge`](#compute_challenge).
 
@@ -692,5 +716,7 @@ def verify_blob_kzg_proof_batch(blobs: Sequence[Blob],
 
     return verify_kzg_proof_batch(commitments, evaluation_challenges, ys, proofs)
 ```
+
+<!-- NOTES-BEGIN -->
 
 Use `verify_kzg_proof_batch` to verify multiple blob proofs at the same time.

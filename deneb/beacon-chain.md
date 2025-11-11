@@ -48,6 +48,8 @@
 
 ## Introduction
 
+<!-- NOTES-BEGIN -->
+
 Deneb is a consensus-layer upgrade containing a number of features, most notably its flagship feature: **blobs**. Blobs are a new form of data storage that can be contained in transactions, like calldata. However, blobs have two key differences from calldata:
 
 1. **Blobs are much larger, and much cheaper per byte, than calldata**. A blob has ~127 kB of data (more precisely: 4096 elements of a prime field modulo `52435875175126190479447740508185965837690552500527637822603658699938581184513` (~1.8 * 2<sup>254</sup>), and there is a separate floating basefee and per-block limit for blobs, allowing blobs to be very cheap even if regular execution gas is expensive.
@@ -91,6 +93,8 @@ In addition to blobs, there are also a few relatively minor changes introduced i
 | `MAX_BLOB_COMMITMENTS_PER_BLOCK` | `uint64(2**12)` (= 4096) | *[New in Deneb:EIP4844]* hardfork independent fixed theoretical limit same as `LIMIT_BLOBS_PER_TX` (see EIP 4844) |
 | `MAX_BLOBS_PER_BLOCK`            | `uint64(6)` | *[New in Deneb:EIP4844]* maximum number of blobs in a single block limited by `MAX_BLOB_COMMITMENTS_PER_BLOCK` |
 
+<!-- NOTES-BEGIN -->
+
 *Note*: The blob transactions are packed into the execution payload by the EL/builder with their corresponding blobs being independently transmitted
 and are limited by `MAX_BLOB_GAS_PER_BLOCK // GAS_PER_BLOB`. However the CL limit is independently defined by `MAX_BLOBS_PER_BLOCK`.
 
@@ -104,15 +108,19 @@ The `MAX_BLOB_COMMITMENTS_PER_BLOCK` corresponds to 4096 * 127 kB = 509 MB of bl
 | - | - |
 | `MAX_PER_EPOCH_ACTIVATION_CHURN_LIMIT` | `uint64(2**3)` (= 8) |
 
+<!-- NOTES-BEGIN -->
+
 We add a new limit to the maximum number of validator activations that can take place, to limit the rate at which the total quantity of staked ETH can grow.
 
 ## Containers
 
 ### Extended containers
 
-#### `BeaconBlockBody`
+<!-- NOTES-BEGIN -->
 
 Note: `BeaconBlock` and `SignedBeaconBlock` types are updated indirectly.
+
+#### `BeaconBlockBody`
 
 ```python
 class BeaconBlockBody(Container):
@@ -193,13 +201,13 @@ def kzg_commitment_to_versioned_hash(kzg_commitment: KZGCommitment) -> Versioned
     return VERSIONED_HASH_VERSION_KZG + hash(kzg_commitment)[1:]
 ```
 
+<!-- NOTES-BEGIN -->
+
 To represent blobs with a 32-byte hash, we follow a two-step pipeline: `Blob -> KZGCommitment -> VersionedHash`. The `Blob -> KZGCommitment` step is done with the `blob_to_kzg_commitment` function in [polynomial-commitments.md](./polynomial-commitments.md); the `KZGCommitment -> VersionedHash` step is done here. The purpose of the separation is that a `KZGCommitment` is more amenable to mathematical operations that make data availability sampling possible, along with a number of other optimizations, whereas a `VersionedHash` is a more future-proof identifier that can upgrade to other commitment types in the future.
 
 ### Beacon state accessors
 
 #### Modified `get_attestation_participation_flag_indices`
-
-*Note:* The function `get_attestation_participation_flag_indices` is modified to set the `TIMELY_TARGET_FLAG` for any correct target attestation, regardless of `inclusion_delay` as a baseline reward for any speed of inclusion of an attestation that contributes to justification of the contained chain for EIP-7045.
 
 ```python
 def get_attestation_participation_flag_indices(state: BeaconState,
@@ -229,6 +237,10 @@ def get_attestation_participation_flag_indices(state: BeaconState,
 
     return participation_flag_indices
 ```
+
+<!-- NOTES-BEGIN -->
+
+*Note:* The function `get_attestation_participation_flag_indices` is modified to set the `TIMELY_TARGET_FLAG` for any correct target attestation, regardless of `inclusion_delay` as a baseline reward for any speed of inclusion of an attestation that contributes to justification of the contained chain for EIP-7045.
 
 #### New `get_validator_activation_churn_limit`
 
@@ -260,8 +272,6 @@ class NewPayloadRequest(object):
 
 ##### `is_valid_block_hash`
 
-*Note*: The function `is_valid_block_hash` is modified to include the additional `parent_beacon_block_root` parameter for EIP-4788.
-
 ```python
 def is_valid_block_hash(self: ExecutionEngine,
                         execution_payload: ExecutionPayload,
@@ -271,6 +281,10 @@ def is_valid_block_hash(self: ExecutionEngine,
     """
     ...
 ```
+
+<!-- NOTES-BEGIN -->
+
+*Note*: The function `is_valid_block_hash` is modified to include the additional `parent_beacon_block_root` parameter for EIP-4788.
 
 EIP-4788 allows the EVM to access beacon block roots, which makes it easier to implement smart contract systems that interface with beacon chain operations (notably: decentralized staking pools).
 
@@ -287,8 +301,6 @@ def is_valid_versioned_hashes(self: ExecutionEngine, new_payload_request: NewPay
 
 ##### Modified `notify_new_payload`
 
-*Note*: The function `notify_new_payload` is modified to include the additional `parent_beacon_block_root` parameter for EIP-4788.
-
 ```python
 def notify_new_payload(self: ExecutionEngine,
                        execution_payload: ExecutionPayload,
@@ -298,6 +310,10 @@ def notify_new_payload(self: ExecutionEngine,
     """
     ...
 ```
+
+<!-- NOTES-BEGIN -->
+
+*Note*: The function `notify_new_payload` is modified to include the additional `parent_beacon_block_root` parameter for EIP-4788.
 
 ##### Modified `verify_and_notify_new_payload`
 
@@ -328,8 +344,6 @@ def verify_and_notify_new_payload(self: ExecutionEngine,
 ### Block processing
 
 #### Modified `process_attestation`
-
-*Note*: The function `process_attestation` is modified to expand valid slots for inclusion to those in both `target.epoch` epoch and `target.epoch + 1` epoch for EIP-7045. Additionally, it utilizes an updated version of `get_attestation_participation_flag_indices` to ensure rewards are available for the extended attestation inclusion range for EIP-7045.
 
 ```python
 def process_attestation(state: BeaconState, attestation: Attestation) -> None:
@@ -366,6 +380,10 @@ def process_attestation(state: BeaconState, attestation: Attestation) -> None:
     proposer_reward = Gwei(proposer_reward_numerator // proposer_reward_denominator)
     increase_balance(state, get_beacon_proposer_index(state), proposer_reward)
 ```
+
+<!-- NOTES-BEGIN -->
+
+*Note*: The function `process_attestation` is modified to expand valid slots for inclusion to those in both `target.epoch` epoch and `target.epoch + 1` epoch for EIP-7045. Additionally, it utilizes an updated version of `get_attestation_participation_flag_indices` to ensure rewards are available for the extended attestation inclusion range for EIP-7045.
 
 #### Execution payload
 
@@ -423,8 +441,6 @@ def process_execution_payload(state: BeaconState, body: BeaconBlockBody, executi
 
 #### Modified `process_voluntary_exit`
 
-*Note*: The function `process_voluntary_exit` is modified to use the a fixed fork version -- `CAPELLA_FORK_VERSION` -- for EIP-7044.
-
 ```python
 def process_voluntary_exit(state: BeaconState, signed_voluntary_exit: SignedVoluntaryExit) -> None:
     voluntary_exit = signed_voluntary_exit.message
@@ -446,13 +462,15 @@ def process_voluntary_exit(state: BeaconState, signed_voluntary_exit: SignedVolu
     initiate_validator_exit(state, voluntary_exit.validator_index)
 ```
 
+<!-- NOTES-BEGIN -->
+
+*Note*: The function `process_voluntary_exit` is modified to use the a fixed fork version -- `CAPELLA_FORK_VERSION` -- for EIP-7044.
+
 This allows signed `VoluntaryExit` operations to remain valid forever, even if the protocol upgrades.
 
 ### Epoch processing
 
 #### Registry updates
-
-*Note*: The function `process_registry_updates` is modified to utilize `get_validator_activation_churn_limit()` to rate limit the activation queue for EIP-7514.
 
 ```python
 def process_registry_updates(state: BeaconState) -> None:
@@ -480,12 +498,11 @@ def process_registry_updates(state: BeaconState) -> None:
         validator.activation_epoch = compute_activation_exit_epoch(get_current_epoch(state))
 ```
 
+<!-- NOTES-BEGIN -->
+
+*Note*: The function `process_registry_updates` is modified to utilize `get_validator_activation_churn_limit()` to rate limit the activation queue for EIP-7514.
+
 ## Testing
-
-*Note*: The function `initialize_beacon_state_from_eth1` is modified for pure Deneb testing only.
-
-The `BeaconState` initialization is unchanged, except for the use of the updated `deneb.BeaconBlockBody` type
-when initializing the first body-root.
 
 ```python
 def initialize_beacon_state_from_eth1(eth1_block_hash: Hash32,
@@ -535,3 +552,11 @@ def initialize_beacon_state_from_eth1(eth1_block_hash: Hash32,
 
     return state
 ```
+
+<!-- NOTES-BEGIN -->
+
+*Note*: The function `initialize_beacon_state_from_eth1` is modified for pure Deneb testing only.
+
+The `BeaconState` initialization is unchanged, except for the use of the updated `deneb.BeaconBlockBody` type
+when initializing the first body-root.
+
