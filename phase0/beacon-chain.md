@@ -561,6 +561,8 @@ These values are mixed into the messages of each type when those messages are be
 
 ## Containers
 
+<!-- NOTES-BEGIN -->
+
 The following types are [SimpleSerialize (SSZ)](../../ssz/simple-serialize.md) containers.
 
 *Note*: The definitions are ordered topologically to facilitate execution of the spec.
@@ -577,6 +579,8 @@ class Fork(Container):
     current_version: Version
     epoch: Epoch  # Epoch of latest fork
 ```
+
+<!-- NOTES-BEGIN -->
 
 This struct exists in the state to store the current version of the eth2 protocol. The version number is changed when there is a hard fork: if some new hard fork rules are supposed to take place at epoch `N`, then as part of the epoch `N` state transition, `state.fork` is modified so that:
 
@@ -598,6 +602,8 @@ class ForkData(Container):
     genesis_validators_root: Root
 ```
 
+<!-- NOTES-BEGIN -->
+
 This is a dummy struct that's used to mix in not just the fork version, but also the genesis, in [`get_domain`](#get_domain).
 
 #### `Checkpoint`
@@ -607,6 +613,8 @@ class Checkpoint(Container):
     epoch: Epoch
     root: Root
 ```
+
+<!-- NOTES-BEGIN -->
 
 Ethereum's Casper FFG implementation comes to consensus by dealing with epoch boundary hashes (that is, the most recent block hash in the chain before the start of an epoch). A Casper FFG vote normally consists of (i) source epoch, (ii) source block hash, (iii) target epoch, (iv) target block hash, and in the state we need to store the latest justified epoch (and hash) to know what source to accept, as well as the latest finalized epoch.
 
@@ -626,6 +634,8 @@ class Validator(Container):
     exit_epoch: Epoch
     withdrawable_epoch: Epoch  # When validator can withdraw funds
 ```
+
+<!-- NOTES-BEGIN -->
 
 This is the struct that contains all of the important information relating to a particular validator (except for its exact balance; see the [section on hysteresis above](#hysteresis) for info on that). From top to bottom:
 
@@ -655,6 +665,8 @@ class AttestationData(Container):
     target: Checkpoint
 ```
 
+<!-- NOTES-BEGIN -->
+
 For efficiency reasons, we require each validator to only sign a single attestation in each epoch. However, this attestation has a triple purpose: (i) Casper FFG voting, (ii) stabilizing the short-term block-by-block fork choice by voting on the current head, and (iii) shard block voting (added in phase 1). In each epoch, each validator is assigned to a single committee within a single slot, and they attest (ie. sign) this data structure that combines (i) (`source` and `target`) and (ii) (`beacon_block_root`).
 
 #### `IndexedAttestation`
@@ -665,6 +677,8 @@ class IndexedAttestation(Container):
     data: AttestationData
     signature: BLSSignature
 ```
+
+<!-- NOTES-BEGIN -->
 
 An `AttestationData`, a signature, and a list of indices that participated. This is the format of an attestation when it is included in `AttesterSlashing` objects to slash validators for misbehavior. The idea is that attestations imported from foreign chains may not share the same committees as the current chain, so we need to explicitly provide a list of which validators participated so that the attestation can be verified, and if needed the participants slashed.
 
@@ -678,6 +692,8 @@ class PendingAttestation(Container):
     proposer_index: ValidatorIndex
 ```
 
+<!-- NOTES-BEGIN -->
+
 For efficiency reasons we do not process the full effects of attestations included in a block immediately; that would require editing  1/32 of all validators' exact balances in the Merkle tree, which costs almost as much as simply re-hashing the entire vector. Additionally, it would require storing an extra data structure for "who already attested" to prevent double-counting. Instead, we simply store all attestations that we received in the state, minus their signatures (as those are no longer necessary), plus information about who included them and with what delay (to calculate rewards). These pending attestations are then processed at the end of an epoch.
 
 #### `Eth1Data`
@@ -689,6 +705,8 @@ class Eth1Data(Container):
     block_hash: Bytes32
 ```
 
+<!-- NOTES-BEGIN -->
+
 Every eth2 block contains a vote for an eth1 block. This vote contains the hash of the eth1 block, and to allow more convenient verification of deposits, it also contains the root of the deposit tree and the number of deposits already made. Technically, the deposit tree root and size would be Merkle-proven from the eth1 block hash, but this would involve verifying a hexary RLP Patricia tree Merkle branch, which is needlessly complex.
 
 #### `HistoricalBatch`
@@ -699,9 +717,11 @@ class HistoricalBatch(Container):
     state_roots: Vector[Root, SLOTS_PER_HISTORICAL_ROOT]
 ```
 
+<!-- NOTES-BEGIN -->
+
 See the discussion in the [`SLOTS_PER_HISTORICAL_ROOT`](#slots_per_historical_root) section above.
 
-#### `[Aside: note on the deposit process]`
+**`[Aside: note on the deposit process]`**
 
 The process for someone on eth1 to deposit to become a validator on eth2 is as follows:
 
@@ -720,6 +740,8 @@ class DepositMessage(Container):
     amount: Gwei
 ```
 
+<!-- NOTES-BEGIN -->
+
 This is the data that the `signature` in the `DepositData` is signing over. The signature is necessary, and must sign over all three of these fields, for two reasons:
 
 1. There must be a signature signing over the pubkey itself as a proof of possession to guard against rogue key attacks (see [here](https://crypto.stanford.edu/~dabo/pubs/papers/BLSmultisig.html#mjx-eqn-eqagg) for a description on what rogue key attacks on BLS aggregation are and how proofs of possession, or "prov[ing] knowledge of the secret key (POSK)" solve this problem).
@@ -735,6 +757,8 @@ class DepositData(Container):
     signature: BLSSignature  # Signing over DepositMessage
 ```
 
+<!-- NOTES-BEGIN -->
+
 The struct that goes into the deposit tree saved by the deposit contract on the eth1 side. Note that this data does NOT get verified on the eth1 side (as we do not yet have BLS-12-381 on eth1); invalid signatures could make it into the deposit tree, and it's the eth2 chain's responsibility to ignore them.
 
 #### `BeaconBlockHeader`
@@ -748,11 +772,13 @@ class BeaconBlockHeader(Container):
     body_root: Root
 ```
 
+<!-- NOTES-BEGIN -->
+
 The block header of a beacon chain block: contains the slot, the proposer index, the state root, the root hash of the parent block, and the root hash of everything else in the beacon chain block. Fundamentally similar to block headers in other blockchains including bitcoin and eth1.
 
 <a id="domain_separation" />
 
-#### `[Aside: domain separation]`
+**`[Aside: domain separation]`**
 
 Domain separation in eth2 is done to prevent situations where a signature of an object of one type and context is accidentally a valid signature of an object in a different type or a different context. This could happen because the same data happens to be valid as multiple data types; such situations could conceivably be triggered by attackers to cause slashings or other problems. Domain separation unambiguously makes this impossible.
 
@@ -773,6 +799,8 @@ class SigningData(Container):
     domain: Domain
 ```
 
+<!-- NOTES-BEGIN -->
+
 Eth2 heavily makes use of **signed containers**: structures where there is some inner container `C1`, and an outer container `C2(message: C1, signature: BLSSignature)`. To implement domain separation (see [the section above](#domain_separation)), instead of directly signing the root hash of the message being signed, the signature signs over the root hash of a struct containing that message and the domain (computed via [`get_domain`](#get_domain)).
 
 `SigningData` is a dummy struct used to compute `hash(root_hash(object), domain_hash)`; in general the spec has made the aesthetic decision to broadly eschew explicit inline bit concatenations (`hash(x + y)`) in favor of using structs, with SSZ Merkle-hashing internally performing these bit concatenations.
@@ -787,6 +815,8 @@ class ProposerSlashing(Container):
     signed_header_2: SignedBeaconBlockHeader
 ```
 
+<!-- NOTES-BEGIN -->
+
 A proposer can get slashed for signing two distinct headers at the same slot. This object can be included on-chain to perform that slashing.
 
 #### `AttesterSlashing`
@@ -796,6 +826,8 @@ class AttesterSlashing(Container):
     attestation_1: IndexedAttestation
     attestation_2: IndexedAttestation
 ```
+
+<!-- NOTES-BEGIN -->
 
 An attester can get slashed for signing two attestations that together violate the Casper FFG slashing conditions. This object can be included on-chain to perform that slashing.
 
@@ -809,6 +841,8 @@ class Attestation(Container):
     signature: BLSSignature
 ```
 
+<!-- NOTES-BEGIN -->
+
 A record specifying that part of some committee (using a bitfield to identify which part) signed some `AttestationData`. Eth2 [uses BLS signature aggregation](https://ethresear.ch/t/pragmatic-signature-aggregation-with-bls/2105) for efficiency, so instead of every validator's attestation being included separately, attestations first get broadcasted to an aggregation layer in the network, and then the block proposer can merge all attestations that sign the exact same `AttestationData` (in the normal case this is most of them) into a single `Attestation` that gets included on-chain.
 
 #### `Deposit`
@@ -819,6 +853,8 @@ class Deposit(Container):
     data: DepositData
 ```
 
+<!-- NOTES-BEGIN -->
+
 Proof that a validator deposited. These get processed sequentially in order of index; each proof is a Merkle branch proving that the deposit is in the correct position in the deposit tree that was created by the eth1 deposit contract.
 
 #### `VoluntaryExit`
@@ -828,6 +864,8 @@ class VoluntaryExit(Container):
     epoch: Epoch  # Earliest epoch when voluntary exit can be processed
     validator_index: ValidatorIndex
 ```
+
+<!-- NOTES-BEGIN -->
 
 When a validator wishes to exit voluntarily, they may create and sign and broadcast a message of this type.
 
@@ -848,6 +886,8 @@ class BeaconBlockBody(Container):
     voluntary_exits: List[SignedVoluntaryExit, MAX_VOLUNTARY_EXITS]
 ```
 
+<!-- NOTES-BEGIN -->
+
 The "main" part of a beacon block. The most important thing in here is the attestations, as these need to get included so the chain can track its own finality status and apply rewards and penalties, but this also includes slashings, deposits, voluntary exits, the revealed value to adjust the block's randomness seed, an eth1 vote, and an open "graffiti" field.
 
 #### `BeaconBlock`
@@ -860,6 +900,8 @@ class BeaconBlock(Container):
     state_root: Root
     body: BeaconBlockBody
 ```
+
+<!-- NOTES-BEGIN -->
 
 A full beacon block; basically a beacon block header but with the body root replaced by the full body.
 
@@ -900,6 +942,8 @@ class BeaconState(Container):
     finalized_checkpoint: Checkpoint
 ```
 
+<!-- NOTES-BEGIN -->
+
 This is the most important data structure here; it is the thing that the state transition function that is defined in this spec is modifying. This contains all of the information that is needed to process the next beacon block, and can be split into a few categories:
 
 * Miscellanea and versioning (slot, fork version, genesis time...)
@@ -911,6 +955,8 @@ This is the most important data structure here; it is the thing that the state t
 * Casper FFG-related data
 
 ### Signed envelopes
+
+<!-- NOTES-BEGIN -->
 
 These are just signed versions of many of the containers above:
 
@@ -940,6 +986,8 @@ class SignedBeaconBlockHeader(Container):
 
 ## Helper functions
 
+<!-- NOTES-BEGIN -->
+
 This first set of functions is made up of relatively simple "helper" functions that are then used in the rest of the spec.
 
 *Note*: The definitions below are for specification purposes and are not necessarily optimal implementations.
@@ -961,6 +1009,8 @@ def integer_squareroot(n: uint64) -> uint64:
     return x
 ```
 
+<!-- NOTES-BEGIN -->
+
 A square root function, using [the Babylonian method](https://en.wikipedia.org/wiki/Methods_of_computing_square_roots#Babylonian_method) for efficiency. Guaranteed to provide a precise integer result: the largest integer `x` such that `x**2 <= n` (eg. sqrt(14) = 3, sqrt(15) = 3, sqrt(16) = 4, sqrt(17) = 4). Actual implementations can use other algorithms if needed; only this precise numerical property in the outputs is mandatory.
 
 #### `xor`
@@ -972,6 +1022,8 @@ def xor(bytes_1: Bytes32, bytes_2: Bytes32) -> Bytes32:
     """
     return Bytes32(a ^ b for a, b in zip(bytes_1, bytes_2))
 ```
+
+<!-- NOTES-BEGIN -->
 
 Does a bit-by-bit [XOR](https://en.wikipedia.org/wiki/Exclusive_or) on the inputs.
 
@@ -988,6 +1040,8 @@ def bytes_to_uint64(data: bytes) -> uint64:
     """
     return uint64(int.from_bytes(data, ENDIANNESS))
 ```
+
+<!-- NOTES-BEGIN -->
 
 Converts 8 bytes into a 64-bit integer.
 
@@ -1098,6 +1152,8 @@ def is_eligible_for_activation(state: BeaconState, validator: Validator) -> bool
     )
 ```
 
+<!-- NOTES-BEGIN -->
+
 Note that the activation queue only processes activations that were registered before the last finalized block that the beacon chain knows about; see [the section on registry updates](#Registry-updates) for more information on this.
 
 #### `is_slashable_validator`
@@ -1125,6 +1181,8 @@ def is_slashable_attestation_data(data_1: AttestationData, data_2: AttestationDa
     )
 ```
 
+<!-- NOTES-BEGIN -->
+
 This function determines if the two `AttestationData` objects conflict with each other and so count as a self-contradiction (aka equivocation, aka double-voting) under Casper FFG rules. If they are, then any validator that signed both can be slashed.
 
 #### `is_valid_indexed_attestation`
@@ -1145,6 +1203,8 @@ def is_valid_indexed_attestation(state: BeaconState, indexed_attestation: Indexe
     return bls.FastAggregateVerify(pubkeys, signing_root, indexed_attestation.signature)
 ```
 
+<!-- NOTES-BEGIN -->
+
 Verifies the validity of an attestation (mainly extracting the pubkeys of the signers and then verifying the signature). This function works with indexed attestations, but note that regular attestation verification goes through this function after it converts the bitfield into a list of validator indices.
 
 #### `is_valid_merkle_branch`
@@ -1162,6 +1222,8 @@ def is_valid_merkle_branch(leaf: Bytes32, branch: Sequence[Bytes32], depth: uint
             value = hash(value + branch[i])
     return value == root
 ```
+
+<!-- NOTES-BEGIN -->
 
 A generic Merkle branch validity checker.
 
@@ -1193,6 +1255,8 @@ def compute_shuffled_index(index: uint64, index_count: uint64, seed: Bytes32) ->
 
     return index
 ```
+
+<!-- NOTES-BEGIN -->
 
 Eth2 needs some form of "random sampling" to assign validators to committees; if each validator could choose which committee they are on, a small portion of malicious validators could target one specific shard to attack and make false attestations for that shard. We can model this as a shuffling algorithm, taking an array of length N (filled with the active validator indices in that epoch) and pseudorandomly shuffling it (eg. `[0, 1, 2, 3, 5, 6] -> [3, 2, 0, 5, 6, 1]`); the committees can then just be consecutive slices of the desired length of the output array.
 
@@ -1237,6 +1301,8 @@ def compute_proposer_index(state: BeaconState, indices: Sequence[ValidatorIndex]
         i += 1
 ```
 
+<!-- NOTES-BEGIN -->
+
 Computes the proposer index. This function is somewhat involved; the idea is that it chooses a proposer, accepts them with `BALANCE/32` probability, and if it fails it keeps trying. This is done so that the probability of being selected as a proposer remains proportional to balance.
 
 #### `compute_committee`
@@ -1253,6 +1319,8 @@ def compute_committee(indices: Sequence[ValidatorIndex],
     end = (len(indices) * (index + 1)) // count
     return [indices[compute_shuffled_index(uint64(i), uint64(len(indices)), seed)] for i in range(start, end)]
 ```
+
+<!-- NOTES-BEGIN -->
 
 Take a slice of a validator index list (assumed to be the list of active validator indices), and returns the `index`'th slice (out of a total `count` slices) of the shuffle.
 
@@ -1286,6 +1354,8 @@ def compute_activation_exit_epoch(epoch: Epoch) -> Epoch:
     return Epoch(epoch + 1 + MAX_SEED_LOOKAHEAD)
 ```
 
+<!-- NOTES-BEGIN -->
+
 This function takes as input an epoch (always in practice the current epoch) and outputs the epoch in which a validator that is scheduled for activation in that epoch will get activated. The delay of 4 epochs is used to keep committees predictable.
 
 #### `compute_fork_data_root`
@@ -1302,6 +1372,8 @@ def compute_fork_data_root(current_version: Version, genesis_validators_root: Ro
     ))
 ```
 
+<!-- NOTES-BEGIN -->
+
 The root hash of the genesis validator set gets mixed into the fork version to add further domain separation, allowing chains with different genesises to automatically have different versions. This makes it easier to have many testnets with replay protection.
 
 #### `compute_fork_digest`
@@ -1315,6 +1387,8 @@ def compute_fork_digest(current_version: Version, genesis_validators_root: Root)
     """
     return ForkDigest(compute_fork_data_root(current_version, genesis_validators_root)[:4])
 ```
+
+<!-- NOTES-BEGIN -->
 
 The first four bytes of the fork digest are used on the p2p layer to separate validators of different chains into different networks.
 
@@ -1333,6 +1407,8 @@ def compute_domain(domain_type: DomainType, fork_version: Version=None, genesis_
     return Domain(domain_type + fork_data_root[:28])
 ```
 
+<!-- NOTES-BEGIN -->
+
 A helper function used by [`get_domain`](#get_domain). Combines together domain type and fork version (see [the section on forks](#Fork)) into a `Domain` object.
 
 See also [the section on domain separation](#domain_separation).
@@ -1349,6 +1425,8 @@ def compute_signing_root(ssz_object: SSZObject, domain: Domain) -> Root:
         domain=domain,
     ))
 ```
+
+<!-- NOTES-BEGIN -->
 
 Computes the hash that is being signed when an SSZ container is being signed. This is done by creating an ephemeral SSZ container that puts the original container and the domain together, and outputting the root of that.
 
@@ -1408,6 +1486,8 @@ def get_randao_mix(state: BeaconState, epoch: Epoch) -> Bytes32:
     return state.randao_mixes[epoch % EPOCHS_PER_HISTORICAL_VECTOR]
 ```
 
+<!-- NOTES-BEGIN -->
+
 In the state, we store an array of historical randao mixes (aka pseudorandomness seeds). This is needed because for many reasons we want to be able to calculate historical committees. Sometimes we care about very recent history (eg. attestations from epoch N can get included in epoch N+1, so the end-of-epoch processing of epoch N+1 needs to know what the randomness seed used in epoch N was so that it can compute the committees of that epoch), but sometimes we want to look far back, eg. we want to be able to calculate committees from months ago to verify slashings. Having a 32-eek historical store of randomness seeds helps us do this.
 
 #### `get_active_validator_indices`
@@ -1419,6 +1499,8 @@ def get_active_validator_indices(state: BeaconState, epoch: Epoch) -> Sequence[V
     """
     return [ValidatorIndex(i) for i, v in enumerate(state.validators) if is_active_validator(v, epoch)]
 ```
+
+<!-- NOTES-BEGIN -->
 
 Returns the subset of all validator indices that is active in the given epoch (note that this method can also get the historic active validator index set for any earlier epoch, as the state stores activation and exit epochs of all validators)
 
@@ -1433,6 +1515,8 @@ def get_validator_churn_limit(state: BeaconState) -> uint64:
     return max(MIN_PER_EPOCH_CHURN_LIMIT, uint64(len(active_validator_indices)) // CHURN_LIMIT_QUOTIENT)
 ```
 
+<!-- NOTES-BEGIN -->
+
 See the [section on churn](#churn).
 
 #### `get_seed`
@@ -1445,6 +1529,8 @@ def get_seed(state: BeaconState, epoch: Epoch, domain_type: DomainType) -> Bytes
     mix = get_randao_mix(state, Epoch(epoch + EPOCHS_PER_HISTORICAL_VECTOR - MIN_SEED_LOOKAHEAD - 1))  # Avoid underflow
     return hash(domain_type + uint_to_bytes(epoch) + mix)
 ```
+
+<!-- NOTES-BEGIN -->
 
 Returns the randomness seed for the given epoch. Note the precise way the wiring is done here: the seed _relevant in_ the given epoch is the seed _generated_ 5 epochs ago. For simplicity, you should mentally think of this as just `get_randao_mix(state, Epoch(epoch - MIN_SEED_LOOKAHEAD - 1))`.
 
@@ -1466,6 +1552,8 @@ def get_committee_count_per_slot(state: BeaconState, epoch: Epoch) -> uint64:
         uint64(len(get_active_validator_indices(state, epoch))) // SLOTS_PER_EPOCH // TARGET_COMMITTEE_SIZE,
     ))
 ```
+
+<!-- NOTES-BEGIN -->
 
 Returns the number of committees in each slot (and in phase 1+, the number of shards crosslinked in each slot). If there are at least enough validators to fill up a full committee (128 validators) for each shard (\*64) for each slot in the epoch (\*32), ie. >= 262,144 validators or 8,388,608 ETH, then we get the full 64 committees per slot, and every shard gets crosslinked in every slot.
 
@@ -1490,6 +1578,8 @@ def get_beacon_committee(state: BeaconState, slot: Slot, index: CommitteeIndex) 
     )
 ```
 
+<!-- NOTES-BEGIN -->
+
 Gets the i'th committee for the given slot.
 
 #### `get_beacon_proposer_index`
@@ -1505,6 +1595,8 @@ def get_beacon_proposer_index(state: BeaconState) -> ValidatorIndex:
     return compute_proposer_index(state, indices, seed)
 ```
 
+<!-- NOTES-BEGIN -->
+
 Gets the current block proposer. Note that `compute_proposer_index` is maintained separately from this code because in phase 1 we plan to add shard proposer selection code that also uses that function.
 
 #### `get_total_balance`
@@ -1518,6 +1610,8 @@ def get_total_balance(state: BeaconState, indices: Set[ValidatorIndex]) -> Gwei:
     """
     return Gwei(max(EFFECTIVE_BALANCE_INCREMENT, sum([state.validators[index].effective_balance for index in indices])))
 ```
+
+<!-- NOTES-BEGIN -->
 
 Gets the total balance of the given set of validator indices (this is a helper function; we use it to get the total active balance and the total balance approving some FFG vote or shard block).
 
@@ -1543,6 +1637,9 @@ def get_domain(state: BeaconState, domain_type: DomainType, epoch: Epoch=None) -
     fork_version = state.fork.previous_version if epoch < state.fork.epoch else state.fork.current_version
     return compute_domain(domain_type, fork_version, state.genesis_validators_root)
 ```
+
+<!-- NOTES-BEGIN -->
+
 Returns the domain hash (data which gets mixed in with a message being signed) for a particular `DomainType`. This is used to implement domain separation; see [the section on domain separation](#domain_separation) for more info.
 
 #### `get_indexed_attestation`
@@ -1561,6 +1658,8 @@ def get_indexed_attestation(state: BeaconState, attestation: Attestation) -> Ind
     )
 ```
 
+<!-- NOTES-BEGIN -->
+
 Converts an attestation in the regular format, where the set of signers is defined by a bitfield determining which members of the committee participated, into an attestation that directly contains the validator indices of the participants (ie. the type used in slashings).
 
 We have logic to convert from one type of attestation to the other so that the methods for verifying regular attestations and for verifying attestations in slashings can share most of the same code.
@@ -1578,9 +1677,13 @@ def get_attesting_indices(state: BeaconState,
     return set(index for i, index in enumerate(committee) if bits[i])
 ```
 
+<!-- NOTES-BEGIN -->
+
 Computes the committee that needed to sign an attestation with particular `AttestationData`, and uses that and the bitfield in the attestation to determine the raw list of validator indices that participated in the attestation.
 
 ### Beacon state mutators
+
+<!-- NOTES-BEGIN -->
 
 These methods (no longer pure functions) modify the beacon chain state.
 
@@ -1628,6 +1731,8 @@ def initiate_validator_exit(state: BeaconState, index: ValidatorIndex) -> None:
     validator.withdrawable_epoch = Epoch(validator.exit_epoch + MIN_VALIDATOR_WITHDRAWABILITY_DELAY)
 ```
 
+<!-- NOTES-BEGIN -->
+
 This function initiates the procedure for a validator to exit and is called by (i) `VoluntaryExit` processing, (ii) the code enforcing the "eject if under 16 ETH balance" rule, and (iii) slashing.
 
 The code here enforces both (i) the "minimum 4 epoch delay rule" and (ii) the exit queue (in the case that too many validators are trying to exit at the same time). The implementation is as follows. Start off with the current epoch + 5 (the current epoch is already partially over so we need +5 to guarantee the delay is >=4 epochs). See if there are already too many validators exiting at that epoch; if there are not, then exit at that epoch, but if there are, instead try the next epoch. This creates a de-facto first-in-first-out queue for exits in the case of congestion.
@@ -1659,6 +1764,8 @@ def slash_validator(state: BeaconState,
     increase_balance(state, whistleblower_index, Gwei(whistleblower_reward - proposer_reward))
 ```
 
+<!-- NOTES-BEGIN -->
+
 Slashes a validator (ie. forcibly exits and penalizes the validator if they did something provably illegal, eg. signing two conflicting messages in the same epoch). Slashing performs the following actions:
 
 * Forcibly exits the validator
@@ -1671,9 +1778,13 @@ Slashes a validator (ie. forcibly exits and penalizes the validator if they did 
 
 ## Genesis
 
+<!-- NOTES-BEGIN -->
+
 The main function defined here, `initialize_beacon_state_from_eth1`, takes an eth1 block hash and timestamp and a list of deposits, and generates an eth2 genesis state. All clients will run this function to compute the genesis state when the chain launches for the first time.
 
 ### Initialize beacon state from Eth1
+
+<!-- NOTES-BEGIN -->
 
 Before the Ethereum 2.0 genesis has been triggered, and for every Ethereum 1.0 block, let `candidate_state = initialize_beacon_state_from_eth1(eth1_block_hash, eth1_timestamp, deposits)` where:
 
@@ -1721,6 +1832,8 @@ def initialize_beacon_state_from_eth1(eth1_block_hash: Bytes32,
     return state
 ```
 
+<!-- NOTES-BEGIN -->
+
 *Note*: The ETH1 block with `eth1_timestamp` meeting the minimum genesis active validator count criteria can also occur before `MIN_GENESIS_TIME`.
 
 ### Genesis state
@@ -1736,6 +1849,8 @@ def is_valid_genesis_state(state: BeaconState) -> bool:
     return True
 ```
 
+<!-- NOTES-BEGIN -->
+
 *Note*: The `is_valid_genesis_state` function (including `MIN_GENESIS_TIME` and `MIN_GENESIS_ACTIVE_VALIDATOR_COUNT`) is a placeholder for testing. It has yet to be finalized by the community and can be updated as necessary.
 
 The idea here is that you can think of a client as repeatedly attempting to create a genesis state using the algorithm above, but only accepting the state when it satisfies the function above. In reality, clients will not work this way because it is too inefficient (better just track valid eth1 deposits and the timestamp from eth1, and activate when both hit the target). 
@@ -1747,11 +1862,15 @@ Let `genesis_block = BeaconBlock(state_root=hash_tree_root(genesis_state))`.
 
 ## Beacon chain state transition function
 
+<!-- NOTES-BEGIN -->
+
 Here, we finally get to defining the main function in the spec, which defines how the state is to be modified when a block is processed. The function also has the ability to declare that the block is invalid (this is typically done with either `assert`s, though anything that causes the code to throw an exception, eg. out-of-range list accessed, as well as uint64 overflow or underflow, counts as the block being invalid).
 
 We start off with a high-level definition, that breaks it up into two parts: (i) a per-slot state transition (`process_slots`) that takes place in each slot regardless of whether or not there was a block there, and (ii) a per-block state transition that takes the block as an input. For example, if a block has slot 66 and its parent has slot 62, then the `process_slot` function would be called for all four slots in between (and `process_slot` would, in turn, call the epoch-boundary processing function `process_epoch`, because slot 64 is an epoch boundary, between epoch 1 [slots 32...63] and epoch 2 [slots 64...95]).
 
 ### State transition
+
+<!-- NOTES-BEGIN -->
 
 The post-state corresponding to a pre-state `state` and a signed block `signed_block` is defined as `state_transition(state, signed_block)`. State transitions that trigger an unhandled exception (e.g. a failed `assert` or an out-of-range list access) are considered invalid. State transitions that cause a `uint64` overflow or underflow are also considered invalid.
 
@@ -1790,6 +1909,8 @@ def process_slots(state: BeaconState, slot: Slot) -> None:
         state.slot = Slot(state.slot + 1)
 ```
 
+<!-- NOTES-BEGIN -->
+
 Processes all slots between the slot of the parent block and the input slot (which is the current slot), applying the `process_epoch` function if the slot progression crosses an epoch-boundary.
 
 <a id="process_slot_notes" />
@@ -1807,6 +1928,8 @@ def process_slot(state: BeaconState) -> None:
     state.block_roots[state.slot % SLOTS_PER_HISTORICAL_ROOT] = previous_block_root
 ```
 
+<!-- NOTES-BEGIN -->
+
 The main function of the `process_slot` function is to update the historical `block_roots` and `state_roots` arrays. The state root manipulation is needed as a clever trick to get around a challenging issue. Namely, we want to include the root of the block at slot `n` into the history in slot `n`. The most natural time to do this is, well, when we are processing the block. But this poses a problem to the block creator: the post-state root of the block can only be generated after the state transition is fully processed, but including the block root into the history during slot `n` would require the block's post-state root to be known during the state transition!
 
 We get around this via the following tactic. While processing the block at slot `n` (in `process_block`), we add the block header but zero out the state root. Then, at the beginning of the `process_slot` function of slot N+1 (at which point the state has not yet been modified after it was processed in slot `n`), we edit the saved block header and fill in the post-state root.
@@ -1823,6 +1946,8 @@ def process_epoch(state: BeaconState) -> None:
     process_slashings(state)
     process_final_updates(state)
 ```
+
+<!-- NOTES-BEGIN -->
 
 At the epoch boundary (ie. after the end of the last slot of an epoch), we perform a set of procedures, largely around processing the `PendingAttestations` that have been saved up in the current and previous epoch, though there is also some other work that gets done.
 
@@ -1877,6 +2002,8 @@ def get_attesting_balance(state: BeaconState, attestations: Sequence[PendingAtte
     """
     return get_total_balance(state, get_unslashed_attesting_indices(state, attestations))
 ```
+
+<!-- NOTES-BEGIN -->
 
 Gets the total attesting balance (excluding slashed validators) from a list of attestations.
 
@@ -1933,6 +2060,8 @@ def process_justification_and_finalization(state: BeaconState) -> None:
     if all(bits[0:2]) and old_current_justified_checkpoint.epoch + 1 == current_epoch:
         state.finalized_checkpoint = old_current_justified_checkpoint
 ```
+
+<!-- NOTES-BEGIN -->
 
 This function processes the beacon chain's own recordkeeping of which justified and finalized blocks in its own history it knows about. Roughly the first half of this function checks if the checkpoint at the beginning of the current epoch has been justified, meaning 2/3 of active validators voted for it (remember: that's the epoch we're currently at the very end of), and also does that check for the previous epoch. This data gets saved in the `justification_bits` array, which keeps track of which recent epochs have been justified.
 
@@ -2009,6 +2138,8 @@ def get_attestation_component_deltas(state: BeaconState,
             penalties[index] += get_base_reward(state, index)
     return rewards, penalties
 ```
+
+<!-- NOTES-BEGIN -->
 
 This is a helper function that outputs a list of rewards and penalties for validators; it is used for correct-source, correct-target, and correct-head rewards. The general approach is: if portion `p` (eg. `p=0.9` for 90%) of validators achieve some property in their attestations, then those validators get a reward of `base_reward * p`, and the validators that did not achieve that property get a penalty of `base_reward`.
 
@@ -2092,6 +2223,8 @@ def get_inactivity_penalty_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], S
     return rewards, penalties
 ```
 
+<!-- NOTES-BEGIN -->
+
 This code implements the [inactivity leak](#inactivity-quotient).
 
 ##### `get_attestation_deltas`
@@ -2161,6 +2294,8 @@ def process_registry_updates(state: BeaconState) -> None:
         validator.activation_epoch = compute_activation_exit_epoch(get_current_epoch(state))
 ```
 
+<!-- NOTES-BEGIN -->
+
 This function processes (i) the validator activation queue, and (ii) the rule that validators with <= 16 ETH get ejected. Note that the validator activation queue is implemented in a more complex way than the exit queue, which simply immediately assigns exit epochs.
 
 The reason why we cannot do that here is that we want to only process activations if the activation was initiated in a block that is already finalized. This is done to ensure that, except in the extreme case where two conflicting blocks have been finalized, any validator that has is active on one chain must also have been at least assigned an index on the other chain (and the same index on both sides). This is done to make sure `indexed_attestations` produced by one chain can be processed on the other chain for slashings. If one chain could contain validators that were completely unknown on the other chain, slashing processing would break, as the other chain would not know the public key for those validators (and including the public key would have been more space-inefficient; 48 bytes per validator instead of 3 bytes).
@@ -2169,7 +2304,7 @@ Note that if two conflicting blocks _do_ get finalized, the first time that happ
 
 <a id="anti-correlation" />
 
-#### `[Aside: anti-correlation penalties in Eth2]`
+**`[Aside: anti-correlation penalties in Eth2]`**
 
 In eth2, **anti-correlation penalties** are penalties structured in such a way that you get penalized more for the same offense if many other validators perform that same offense at the same time. Anti-correlation penalties are done for a few reasons:
 
@@ -2199,6 +2334,8 @@ def process_slashings(state: BeaconState) -> None:
             penalty = penalty_numerator // total_balance * increment
             decrease_balance(state, ValidatorIndex(index), penalty)
 ```
+
+<!-- NOTES-BEGIN -->
 
 This is the code that processes the proportional slashing penalty rule described [above](#anti-correlation). The idea is that `state.slashings` is an array where the i'th element in the array contains the total ETH balance of validators slashed in the most recent `(i % EPOCHS_PER_SLASHINGS_VECTOR)`'th epoch, where `EPOCHS_PER_SLASHINGS_VECTOR` is the number of epochs in 4 eeks. For example, if the current epoch is 53 and if `EPOCHS_PER_SLASHINGS_VECTOR` were equal to 10, its elements would store the total ETH balanced slashed in epochs `[50, 51, 52, 53, 44, 45, 46, 47, 48, 49]` respectively. If we simply take the sum of this array, we get the total slashings in the last `EPOCHS_PER_SLASHINGS_VECTOR` epochs, regardless of what position in the array is currently being updated.
 
@@ -2237,6 +2374,8 @@ def process_final_updates(state: BeaconState) -> None:
     state.current_epoch_attestations = []
 ```
 
+<!-- NOTES-BEGIN -->
+
 This function does a few miscellaneous operations, particularly:
 
 * Resetting eth1 data votes at the end of every 1024-slot (32-epoch) voting period
@@ -2256,6 +2395,8 @@ def process_block(state: BeaconState, block: BeaconBlock) -> None:
     process_eth1_data(state, block.body)
     process_operations(state, block.body)
 ```
+
+<!-- NOTES-BEGIN -->
 
 There are four main components that we process:
 
@@ -2290,6 +2431,8 @@ def process_block_header(state: BeaconState, block: BeaconBlock) -> None:
     assert not proposer.slashed
 ```
 
+<!-- NOTES-BEGIN -->
+
 This is fairly self-explanatory; just checking a few basic correctness properties of the block, and storing the block header in the cache without its state root (as we don't know its state roots yet; see [the section on `process_slot`](#process_slot_notes) to understand more fully what's going on there).
 
 #### RANDAO
@@ -2306,6 +2449,8 @@ def process_randao(state: BeaconState, body: BeaconBlockBody) -> None:
     state.randao_mixes[epoch % EPOCHS_PER_HISTORICAL_VECTOR] = mix
 ```
 
+<!-- NOTES-BEGIN -->
+
 See [the section on seeds](#seeds) to understand what's going on here.
 
 #### Eth1 data
@@ -2316,6 +2461,8 @@ def process_eth1_data(state: BeaconState, body: BeaconBlockBody) -> None:
     if state.eth1_data_votes.count(body.eth1_data) * 2 > EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH:
         state.eth1_data = body.eth1_data
 ```
+
+<!-- NOTES-BEGIN -->
 
 Store vote counts for every eth1 block that has votes; if any eth1 block wins majority support within a 1024-slot voting period, formally accept that eth1 block and set it as the official "latest known eth1 block" in the eth2 state.
 
@@ -2336,6 +2483,8 @@ def process_operations(state: BeaconState, body: BeaconBlockBody) -> None:
     for_ops(body.deposits, process_deposit)
     for_ops(body.voluntary_exits, process_voluntary_exit)
 ```
+
+<!-- NOTES-BEGIN -->
 
 Basically, for each type of operation in the block, run its associated function. Also, verify that the maximum possible number of deposits is included. Note that there are maximums on all operation types, though they do not need to be explicitly enforced here because they are already included in the [beacon block body SSZ data type](#BeaconBlockBody).
 
@@ -2364,6 +2513,8 @@ def process_proposer_slashing(state: BeaconState, proposer_slashing: ProposerSla
     slash_validator(state, header_1.proposer_index)
 ```
 
+<!-- NOTES-BEGIN -->
+
 Slashes a validator that proposed two different blocks in the same slot.
 
 ##### Attester slashings
@@ -2384,6 +2535,8 @@ def process_attester_slashing(state: BeaconState, attester_slashing: AttesterSla
             slashed_any = True
     assert slashed_any
 ```
+
+<!-- NOTES-BEGIN -->
 
 Given two attestations (contained in an `AttesterSlashing`):
 
@@ -2421,6 +2574,8 @@ def process_attestation(state: BeaconState, attestation: Attestation) -> None:
     # Verify signature
     assert is_valid_indexed_attestation(state, get_indexed_attestation(state, attestation))
 ```
+
+<!-- NOTES-BEGIN -->
 
 To ensure the chain finalizes, we force attesters to (i) use the latest justified block as their source, and (ii) use the correct epoch for their target (though possibly the wrong block, as the target block may not be stabilized as part of the chain yet). We do some basic sanity-checking (the attestation is not from the future, and the attestation committee index is not >= the number of committees in that slot). We then verify the attestation, and save it as a `PendingAttestation`, leaving more detailed processing of all attestations until the end of the epoch.
 
@@ -2482,6 +2637,8 @@ def process_deposit(state: BeaconState, deposit: Deposit) -> None:
         increase_balance(state, index, amount)
 ```
 
+<!-- NOTES-BEGIN -->
+
 Processes a deposit; this includes (i) verifying the Merkle branch, proving the deposit is part of the deposit tree created by the eth1 deposit contract, (ii) verifying that deposits are being processed in order, (iii) verify the signature on the deposit, and finally (iv) adding it to the validator set. If the deposit pubkey is already in the validator set, the deposit is instead treated as a balance top-up.
 
 (Note: yes, balance top-ups do _kinda_ get around activation queues, but note that for an attacker to benefit from this, they need to have already lost the ETH that is being topped up [since depositing requires 32 ETH and 32 ETH is the maximum effective balance], so it is not an attack vector)
@@ -2507,6 +2664,8 @@ def process_voluntary_exit(state: BeaconState, signed_voluntary_exit: SignedVolu
     # Initiate exit
     initiate_validator_exit(state, voluntary_exit.validator_index)
 ```
+
+<!-- NOTES-BEGIN -->
 
 Validators can voluntarily sign a message that can be included on-chain to exit the validator set. Note that there is a minimum active period of ~1 day before a validator can exit; this prevents validators from repeatedly depositing and withdrawing to try to get onto a particular shard committee, as well as polluting the deposit/withdraw queue in general.
 
