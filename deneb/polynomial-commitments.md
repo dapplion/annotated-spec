@@ -43,55 +43,6 @@
 
 <!-- mdformat-toc end -->
 
-## Table of contents
-
-<!-- TOC -->
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-- [Introduction](#introduction)
-- [Custom types](#custom-types)
-- [Constants](#constants)
-- [Preset](#preset)
-  - [Blob](#blob)
-  - [Trusted setup](#trusted-setup)
-- [Helper functions](#helper-functions)
-  - [Bit-reversal permutation](#bit-reversal-permutation)
-    - [`is_power_of_two`](#is_power_of_two)
-    - [`reverse_bits`](#reverse_bits)
-    - [`bit_reversal_permutation`](#bit_reversal_permutation)
-  - [BLS12-381 helpers](#bls12-381-helpers)
-    - [`multi_exp`](#multi_exp)
-    - [`hash_to_bls_field`](#hash_to_bls_field)
-    - [`bytes_to_bls_field`](#bytes_to_bls_field)
-    - [`bls_field_to_bytes`](#bls_field_to_bytes)
-    - [`validate_kzg_g1`](#validate_kzg_g1)
-    - [`bytes_to_kzg_commitment`](#bytes_to_kzg_commitment)
-    - [`bytes_to_kzg_proof`](#bytes_to_kzg_proof)
-    - [`blob_to_polynomial`](#blob_to_polynomial)
-    - [`compute_challenge`](#compute_challenge)
-    - [`bls_modular_inverse`](#bls_modular_inverse)
-    - [`div`](#div)
-    - [`g1_lincomb`](#g1_lincomb)
-    - [`compute_powers`](#compute_powers)
-    - [`compute_roots_of_unity`](#compute_roots_of_unity)
-  - [Polynomials](#polynomials)
-    - [`evaluate_polynomial_in_evaluation_form`](#evaluate_polynomial_in_evaluation_form)
-  - [KZG](#kzg)
-    - [`blob_to_kzg_commitment`](#blob_to_kzg_commitment)
-    - [`verify_kzg_proof`](#verify_kzg_proof)
-    - [`verify_kzg_proof_impl`](#verify_kzg_proof_impl)
-    - [`verify_kzg_proof_batch`](#verify_kzg_proof_batch)
-    - [`compute_kzg_proof`](#compute_kzg_proof)
-    - [`compute_quotient_eval_within_domain`](#compute_quotient_eval_within_domain)
-    - [`compute_kzg_proof_impl`](#compute_kzg_proof_impl)
-    - [`compute_blob_kzg_proof`](#compute_blob_kzg_proof)
-    - [`verify_blob_kzg_proof`](#verify_blob_kzg_proof)
-    - [`verify_blob_kzg_proof_batch`](#verify_blob_kzg_proof_batch)
-
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-<!-- /TOC -->
-
 ## Introduction
 
 This document specifies basic polynomial operations and KZG polynomial
@@ -116,6 +67,13 @@ cryptographic normalization before invoking any internal functions.
 | `KZGCommitment` | `Bytes48`                                                       | Validation: Perform [BLS standard's](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-bls-signature-04#section-2.5) "KeyValidate" check but do allow the identity point |
 | `KZGProof`      | `Bytes48`                                                       | Same as for `KZGCommitment`                                                                                                                                                  |
 | `Blob`          | `ByteVector[BYTES_PER_FIELD_ELEMENT * FIELD_ELEMENTS_PER_BLOB]` | A basic data blob                                                                                                                                                            |
+
+## Cryptographic types
+
+| Name                                                                                                                                                  | SSZ equivalent                                     | Description                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [`BLSFieldElement`](https://github.com/ethereum/consensus-specs/blob/36a5719b78523c057065515c8f8fcaeba75d065b/pysetup/spec_builders/deneb.py#L18-L19) | `uint256`                                          | <!-- predefined-type --> A value in the finite field defined by `BLS_MODULUS` |
+| [`Polynomial`](https://github.com/ethereum/consensus-specs/blob/36a5719b78523c057065515c8f8fcaeba75d065b/pysetup/spec_builders/deneb.py#L22-L28)      | `Vector[BLSFieldElement, FIELD_ELEMENTS_PER_BLOB]` | <!-- predefined-type --> A polynomial in evaluation form                      |
 
 ## Constants
 
@@ -380,28 +338,6 @@ def compute_challenge(blob: Blob, commitment: KZGCommitment) -> BLSFieldElement:
 Suppose that a client receives a blob from a `BlobSidecar`, and they want to check if it matches the KZG commitment in the `BeaconBlock`. One way to do this would be to compute the KZG commitment from the blob directly, and check if it matches. However, this is too slow to do with many blobs. Instead, we use a clever cryptographic trick. We hash the blob and the commitment to generate a random point. We require the beacon block to provide an evaluation of the polynomial at that point, along with a KZG evaluation proof. The client can then evaluate the polynomial from the blob directly, and check that the two evaluations match. This is a common random checking trick used in cryptography: to verify that two polynomials `P` and `Q` are different, choose a random `x`, and verify that `P(x) = Q(x)`. It works as long as the domain from which `x` is chosen is large enough; in this case, it is (because `BLS_MODULUS` is a 256-bit number).
 
 This function computes this challenge point `x`.
-
-#### `bls_modular_inverse`
-
-```python
-def bls_modular_inverse(x: BLSFieldElement) -> BLSFieldElement:
-    """
-    Compute the modular inverse of x (for x != 0)
-    i.e. return y such that x * y % BLS_MODULUS == 1
-    """
-    assert (int(x) % BLS_MODULUS) != 0
-    return BLSFieldElement(pow(x, -1, BLS_MODULUS))
-```
-
-#### `div`
-
-```python
-def div(x: BLSFieldElement, y: BLSFieldElement) -> BLSFieldElement:
-    """
-    Divide two field elements: ``x`` by `y``.
-    """
-    return BLSFieldElement((int(x) * int(bls_modular_inverse(y))) % BLS_MODULUS)
-```
 
 #### `g1_lincomb`
 
@@ -782,6 +718,7 @@ def verify_blob_kzg_proof_batch(
 
     return verify_kzg_proof_batch(commitments, evaluation_challenges, ys, proofs)
 ```
+
 <!-- NOTES-BEGIN -->
 
 Use `verify_kzg_proof_batch` to verify multiple blob proofs at the same time.

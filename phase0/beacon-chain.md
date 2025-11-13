@@ -1,33 +1,25 @@
-# Vitalik's Annotated Ethereum 2.0 Spec
+# Phase 0 -- The Beacon Chain
 
-**Notice**: This document was written in July-Aug 2020.
-
-In addition to this work, I highly recommend Ben Edgington's [annotated spec](https://benjaminion.xyz/eth2-annotated-spec/), and [Danny Ryan's "Phase 0 for Humans"](https://notes.ethereum.org/@djrtwo/Bkn3zpwxB). This spec is more focused on design rationale issues; reading both is worthwhile for a better understanding of the eth2 protocol.
-
-## Table of contents
-
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
 
 - [Introduction](#introduction)
-  - [What are proof of stake and sharding and why do they matter?](#what-are-proof-of-stake-and-sharding-and-why-do-they-matter)
-  - [How does eth2 sharding work?](#how-does-eth2-sharding-work)
-  - [How does eth2 proof of stake work?](#how-does-eth2-proof-of-stake-work)
-  - [Phases](#phases)
-- [Organization and type system](#organization-and-type-system)
+- [Notation](#notation)
 - [Custom types](#custom-types)
 - [Constants](#constants)
-- [Configuration](#configuration)
   - [Misc](#misc)
+  - [Withdrawal prefixes](#withdrawal-prefixes)
+  - [Domain types](#domain-types)
+- [Preset](#preset)
+  - [Misc](#misc-1)
   - [Gwei values](#gwei-values)
-  - [Initial values](#initial-values)
   - [Time parameters](#time-parameters)
-    - [`[Aside: RANDAO, seeds and committee generation]`](#aside-randao-seeds-and-committee-generation)
   - [State list lengths](#state-list-lengths)
   - [Rewards and penalties](#rewards-and-penalties)
   - [Max operations per block](#max-operations-per-block)
-  - [Domain types](#domain-types)
+- [Configuration](#configuration)
+  - [Genesis settings](#genesis-settings)
+  - [Time parameters](#time-parameters-1)
+  - [Validator cycle](#validator-cycle)
 - [Containers](#containers)
   - [Misc dependencies](#misc-dependencies)
     - [`Fork`](#fork)
@@ -39,11 +31,9 @@ In addition to this work, I highly recommend Ben Edgington's [annotated spec](ht
     - [`PendingAttestation`](#pendingattestation)
     - [`Eth1Data`](#eth1data)
     - [`HistoricalBatch`](#historicalbatch)
-    - [`[Aside: note on the deposit process]`](#aside-note-on-the-deposit-process)
     - [`DepositMessage`](#depositmessage)
     - [`DepositData`](#depositdata)
     - [`BeaconBlockHeader`](#beaconblockheader)
-    - [`[Aside: domain separation]`](#aside-domain-separation)
     - [`SigningData`](#signingdata)
   - [Beacon operations](#beacon-operations)
     - [`ProposerSlashing`](#proposerslashing)
@@ -66,12 +56,12 @@ In addition to this work, I highly recommend Ben Edgington's [annotated spec](ht
     - [`xor`](#xor)
     - [`uint_to_bytes`](#uint_to_bytes)
     - [`bytes_to_uint64`](#bytes_to_uint64)
+    - [`saturating_sub`](#saturating_sub)
   - [Crypto](#crypto)
     - [`hash`](#hash)
     - [`hash_tree_root`](#hash_tree_root)
-    - [BLS Signatures](#bls-signatures)
+    - [BLS signatures](#bls-signatures)
   - [Predicates](#predicates)
-    - [`[Aside: note on a validator's life cycle]`](#aside-note-on-a-validators-life-cycle)
     - [`is_active_validator`](#is_active_validator)
     - [`is_eligible_for_activation_queue`](#is_eligible_for_activation_queue)
     - [`is_eligible_for_activation`](#is_eligible_for_activation)
@@ -79,15 +69,15 @@ In addition to this work, I highly recommend Ben Edgington's [annotated spec](ht
     - [`is_slashable_attestation_data`](#is_slashable_attestation_data)
     - [`is_valid_indexed_attestation`](#is_valid_indexed_attestation)
     - [`is_valid_merkle_branch`](#is_valid_merkle_branch)
-  - [Misc](#misc-1)
+  - [Misc](#misc-2)
     - [`compute_shuffled_index`](#compute_shuffled_index)
     - [`compute_proposer_index`](#compute_proposer_index)
     - [`compute_committee`](#compute_committee)
+    - [`compute_time_at_slot`](#compute_time_at_slot)
     - [`compute_epoch_at_slot`](#compute_epoch_at_slot)
     - [`compute_start_slot_at_epoch`](#compute_start_slot_at_epoch)
     - [`compute_activation_exit_epoch`](#compute_activation_exit_epoch)
     - [`compute_fork_data_root`](#compute_fork_data_root)
-    - [`compute_fork_digest`](#compute_fork_digest)
     - [`compute_domain`](#compute_domain)
     - [`compute_signing_root`](#compute_signing_root)
   - [Beacon state accessors](#beacon-state-accessors)
@@ -113,11 +103,9 @@ In addition to this work, I highly recommend Ben Edgington's [annotated spec](ht
     - [`initiate_validator_exit`](#initiate_validator_exit)
     - [`slash_validator`](#slash_validator)
 - [Genesis](#genesis)
-  - [Initialize beacon state from Eth1](#initialize-beacon-state-from-eth1)
   - [Genesis state](#genesis-state)
   - [Genesis block](#genesis-block)
 - [Beacon chain state transition function](#beacon-chain-state-transition-function)
-  - [State transition](#state-transition)
   - [Epoch processing](#epoch-processing)
     - [Helper functions](#helper-functions-1)
     - [Justification and finalization](#justification-and-finalization)
@@ -127,9 +115,13 @@ In addition to this work, I highly recommend Ben Edgington's [annotated spec](ht
       - [`get_attestation_deltas`](#get_attestation_deltas)
       - [`process_rewards_and_penalties`](#process_rewards_and_penalties)
     - [Registry updates](#registry-updates)
-    - [`[Aside: anti-correlation penalties in Eth2]`](#aside-anti-correlation-penalties-in-eth2)
     - [Slashings](#slashings)
-    - [Final updates](#final-updates)
+    - [Eth1 data votes updates](#eth1-data-votes-updates)
+    - [Effective balances updates](#effective-balances-updates)
+    - [Slashings balances updates](#slashings-balances-updates)
+    - [Randao mixes updates](#randao-mixes-updates)
+    - [Historical roots updates](#historical-roots-updates)
+    - [Participation records rotation](#participation-records-rotation)
   - [Block processing](#block-processing)
     - [Block header](#block-header)
     - [RANDAO](#randao)
@@ -141,7 +133,7 @@ In addition to this work, I highly recommend Ben Edgington's [annotated spec](ht
       - [Deposits](#deposits)
       - [Voluntary exits](#voluntary-exits)
 
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+<!-- mdformat-toc end -->
 
 ## Introduction
 
@@ -161,9 +153,15 @@ block (in a later upgrade) and proof-of-stake votes for a beacon block (Phase
 
 <!-- NOTES-BEGIN -->
 
+**Vitalik's Annotated Ethereum 2.0 Spec**
+
+**Notice**: This document was written in July-Aug 2020.
+
+In addition to this work, I highly recommend Ben Edgington's [annotated spec](https://benjaminion.xyz/eth2-annotated-spec/), and [Danny Ryan's "Phase 0 for Humans"](https://notes.ethereum.org/@djrtwo/Bkn3zpwxB). This spec is more focused on design rationale issues; reading both is worthwhile for a better understanding of the eth2 protocol.
+
 Ethereum 2.0 (aka eth2, aka Serenity) is the next major version of the Ethereum protocol, and is the culmination of [years](https://blog.ethereum.org/2014/10/21/scalability-part-2-hypercubes/) [of](https://github.com/vbuterin/scalability_paper/blob/master/scalability.pdf) [research](https://cdn.hackaday.io/files/10879465447136/Mauve%20Paper%20Vitalik.pdf) into [proof](https://blog.ethereum.org/2014/01/15/slasher-a-punitive-proof-of-stake-algorithm/) [of](https://blog.ethereum.org/2014/11/25/proof-stake-learned-love-weak-subjectivity/) [stake](https://medium.com/@VitalikButerin/minimal-slashing-conditions-20f0b500fc6c) and [sharding](https://ethresear.ch/t/a-proposal-for-structuring-committees-cross-links-etc/2118). The eth2 protocol is a full redesign of the consensus-critical parts of the Ethereum system: a change of the consensus from proof of work to [proof of stake](https://eth.wiki/en/concepts/proof-of-stake-faqs) and the introduction of [sharding](https://eth.wiki/sharding/Sharding-FAQs) are the two most critical changes. As of the time of this writing, eth2 leaves the application-layer parts maximally untouched; that is, transactions and smart contracts continue to work the same way they did before, so applications do not have to change (except to compensate for a few gas cost changes) to be eth2 compatible. However, the engine that ensures that the network comes to consensus on the transactions is radically changed.
 
-### What are proof of stake and sharding and why do they matter?
+**What are proof of stake and sharding and why do they matter?**
 
 For long answers, see:
 
@@ -175,7 +173,7 @@ But in short:
 * **Proof of stake** is a more efficient consensus mechanism that avoids the need to consume extremely large amounts of electricity and hardware costs to maintain the network -- it achieves this by using coins, rather than computing hardware, as the economic basis for the consensus
 * **Sharding** is a scalability technique that involves splitting up verification so that each node only needs to verify a small portion of the transactions in the network, instead of verifying every transaction
 
-### How does eth2 proof of stake work?
+**How does eth2 proof of stake work?**
 
 The participants in eth2 proof of stake consensus are called **validators**. To become a validator, you need to deposit 32 ETH, either from the eth1 chain or from a shard chain (when shard chains become enabled). Once you deposit 32 ETH, you are put into an **activation queue**, and sometime later you become an **active validator**.
 
@@ -187,18 +185,18 @@ During each epoch, each validator makes an **attestation**. An attestation conta
 * A hash of what the validator thinks is the correct shard block to include
 * Some other hashes (the "**source**" and "**target**" in [Casper FFG](https://arxiv.org/abs/1710.09437))
 * A signature from the validator, proving that the validator endorses all of the above
-
+ 
 The chain comes to a consensus as a result of these attestations. Roughly speaking, if 2/3 of active validators sign an attestation supporting a block, that block becomes **finalized** (in reality it's more complex, taking two rounds of signing; see [the Casper FFG paper](https://arxiv.org/abs/1710.09437) for details). A finalized block can never be reverted, unlike in PoW where any block can be reverted if someone creates an even longer chain.
 
 If a validator correctly makes attestations, they get rewarded. If a validator misses their slot or makes an incorrect attestation, they get penalized. If a validator unambiguously contradicts themselves (eg. voting for two conflicting blocks in the same epoch), they get **slashed**. A slashed validator (i) suffers a penalty of 3-100% of their deposit, (ii) is forcibly ejected from the validator set, and (iii) has their coins forcibly locked for an additional 4 eeks before they can withdraw. In general, as long as you are running correct validator software, this will not happen to you, and as long as you stay online more than ~55-70% of the time, validating will be profitable.
 
 A validator can voluntarily initiate an **exit** at any time, though there is a limit on how many can exit per epoch; if too many validators try to exit at the same time they will be put into a queue and will remain active until they get to the front of the queue. After a validator successfully exits, after 1/8 of an eek they will be able to withdraw (though this functionality will only be turned on after ["the merge"](https://ethresear.ch/t/the-eth1-eth2-transition/6265) of eth1 and eth2).
 
-### How does eth2 sharding work
+**How does eth2 sharding work**
 
 See [the corresponding section in the phase 1 doc](../phase1/beacon-chain.md#how-does-eth2-sharding-work).
 
-### Phases
+**Phases**
 
 To reduce risks, the eth2 deployment process is split into phases:
 
@@ -212,7 +210,7 @@ See also [the roadmap](https://media.consensys.net/an-annotated-version-of-vital
 
 ![](../images/roadmap.jpeg)
 
-## Organization and type system
+**Organization and type system**
 
 The spec describes the data types used in eth2, as well as the state transition function (and the helper functions used in defining the state transition function). The functions are written in python to strike a balance between formality (the spec is fully executable) and ease of reading. All functions are strongly typed, with many distinct types to clarify what the inputs and outputs represent.
 
@@ -221,6 +219,10 @@ The type system is based on [SimpleSerialize](https://github.com/ethereum/eth2.0
 The most common basic types in SSZ are integers (usually `uint64`) and hashes (aka `Bytes32`); rarer types like `bool`, variable-length `Bytes`, `Bytes4`, and others also exist. There are four compound types in SSZ: (i) fixed-length lists (called **vectors**), (ii) variable-length lists with a fixed maximum length (called **lists**), (iii) structs (called **containers**) and (iv) union types ("either an X or a Y"), not used in phase 0.
 
 Now, let's get to the actual spec... (phase 0)
+
+## Notation
+
+Code snippets appearing in `this style` are to be interpreted as Python 3 code.
 
 ## Custom types
 
@@ -288,13 +290,6 @@ When you see a function like `def get_block_root_at_slot(state: BeaconState, slo
 
 The following values are (non-configurable) constants used throughout the
 specification.
-
-## Configuration
-
-*Note*: The default mainnet configuration values are included here for
-illustrative purposes. Defaults for this more dynamic type of configuration are
-available with the presets in the [`configs`](../../configs) directory. Testnets
-and other types of chain instances may use a different configuration.
 
 ### Misc
 
@@ -402,6 +397,71 @@ The exact balances change every epoch (due to rewards and penalties), so we stor
 
 Since the exact balance must change by at least a full 0.5 ETH to trigger an effective balance update, this ensures an attacker can't make effective balances update every epoch -- and thus cause processing the chain to become very slow -- by repeatedly nudging the exact balances above, and then below, some threshold.
 
+### Withdrawal prefixes
+
+| Name                             | Value            |
+| -------------------------------- | ---------------- |
+| `BLS_WITHDRAWAL_PREFIX`          | `Bytes1('0x00')` |
+| `ETH1_ADDRESS_WITHDRAWAL_PREFIX` | `Bytes1('0x01')` |
+
+<!-- NOTES-BEGIN -->
+
+When a validator deposits, they provide two keys: a **signing key** and a **withdrawal key**. The withdrawal key is needed to access the funds when they are withdrawn; this dual-key structure reduces risks for validators, as they can keep their withdrawal key in cold storage.
+
+The BLS withdrawal prefix is effectively a "version number" for the withdrawal key; the first version is just a hash of a public key; a withdrawal would reveal the public key as well as a signature signed with that public key specifying a further destination. Future versions will allow directly specifying a smart contract address on any shard of eth2.
+
+
+### Domain types
+
+| Name                         | Value                      |
+| ---------------------------- | -------------------------- |
+| `DOMAIN_BEACON_PROPOSER`     | `DomainType('0x00000000')` |
+| `DOMAIN_BEACON_ATTESTER`     | `DomainType('0x01000000')` |
+| `DOMAIN_RANDAO`              | `DomainType('0x02000000')` |
+| `DOMAIN_DEPOSIT`             | `DomainType('0x03000000')` |
+| `DOMAIN_VOLUNTARY_EXIT`      | `DomainType('0x04000000')` |
+| `DOMAIN_SELECTION_PROOF`     | `DomainType('0x05000000')` |
+| `DOMAIN_AGGREGATE_AND_PROOF` | `DomainType('0x06000000')` |
+| `DOMAIN_APPLICATION_MASK`    | `DomainType('0x00000001')` |
+
+*Note*: `DOMAIN_APPLICATION_MASK` reserves the rest of the bitspace in
+`DomainType` for application usage. This means for some `DomainType`
+`DOMAIN_SOME_APPLICATION`, `DOMAIN_SOME_APPLICATION & DOMAIN_APPLICATION_MASK`
+**MUST** be non-zero. This expression for any other `DomainType` in the
+consensus specs **MUST** be zero.
+
+<!-- NOTES-BEGIN -->
+
+These values are mixed into the messages of each type when those messages are being signed; this prevents messages signed for one purpose from being accidentally valid in another context.
+
+## Preset
+
+*Note*: The below configuration is bundled as a preset: a bundle of
+configuration variables which are expected to differ between different modes of
+operation, e.g. testing, but not generally between different networks.
+Additional preset configurations can be found in the [`configs`](../../configs)
+directory.
+
+### Misc
+
+| Name                             | Value                     |
+| -------------------------------- | ------------------------- |
+| `MAX_COMMITTEES_PER_SLOT`        | `uint64(2**6)` (= 64)     |
+| `TARGET_COMMITTEE_SIZE`          | `uint64(2**7)` (= 128)    |
+| `MAX_VALIDATORS_PER_COMMITTEE`   | `uint64(2**11)` (= 2,048) |
+| `SHUFFLE_ROUND_COUNT`            | `uint64(90)`              |
+| `HYSTERESIS_QUOTIENT`            | `uint64(4)`               |
+| `HYSTERESIS_DOWNWARD_MULTIPLIER` | `uint64(1)`               |
+| `HYSTERESIS_UPWARD_MULTIPLIER`   | `uint64(5)`               |
+
+- For the safety of committees, `TARGET_COMMITTEE_SIZE` exceeds
+  [the recommended minimum committee size of 111](http://web.archive.org/web/20190504131341/https://vitalik.ca/files/Ithaca201807_Sharding.pdf);
+  with sufficient active validators (at least
+  `SLOTS_PER_EPOCH * TARGET_COMMITTEE_SIZE`), the shuffling algorithm ensures
+  committee sizes of at least `TARGET_COMMITTEE_SIZE`. (Unbiasable randomness
+  with a Verifiable Delay Function (VDF) will improve committee robustness and
+  lower the safe minimum committee size.)
+
 ### Gwei values
 
 | Name                          | Value                                   |
@@ -432,21 +492,6 @@ The 32 ETH choice is based on this logic: https://medium.com/@VitalikButerin/par
 | - | - |
 
 Validators that go below 16 ETH get ejected (ie. forcibly exited). This minimum ensures that all active validators' balances are (almost always) within a 2x "band" (maximum effective balance is 32 ETH; anything above is just saved rewards and does not count for staking purposes). This narrow range ensures that committees are stable; if higher disparities were permitted, there would be a higher risk that a few wealthy malicious validators could randomly enter the same committee and take it over with their larger balances.
-
-### Initial values
-
-
-| `GENESIS_FORK_VERSION` | `Version('0x00000000')` |
-| - | - |
-
-See explanation of the `Version` type [above](#Custom-types). The version starting at 0 is self-explanatory (why not 1? Because we're computer scientists, not normal people, doge-dammit!).
-
-| `BLS_WITHDRAWAL_PREFIX` | `Bytes1('0x00')` |
-| - | - |
-
-When a validator deposits, they provide two keys: a **signing key** and a **withdrawal key**. The withdrawal key is needed to access the funds when they are withdrawn; this dual-key structure reduces risks for validators, as they can keep their withdrawal key in cold storage.
-
-The BLS withdrawal prefix is effectively a "version number" for the withdrawal key; the first version is just a hash of a public key; a withdrawal would reveal the public key as well as a signature signed with that public key specifying a further destination. Future versions will allow directly specifying a smart contract address on any shard of eth2.
 
 ### Time parameters
 
@@ -664,28 +709,48 @@ You lose at least 1/32 of your deposit if you get slashed (getting slashed has t
 | `MAX_DEPOSITS`           | `2**4` (= 16)  |
 | `MAX_VOLUNTARY_EXITS`    | `2**4` (= 16)  |
 
-### Domain types
+## Configuration
 
-| Name                         | Value                      |
-| ---------------------------- | -------------------------- |
-| `DOMAIN_BEACON_PROPOSER`     | `DomainType('0x00000000')` |
-| `DOMAIN_BEACON_ATTESTER`     | `DomainType('0x01000000')` |
-| `DOMAIN_RANDAO`              | `DomainType('0x02000000')` |
-| `DOMAIN_DEPOSIT`             | `DomainType('0x03000000')` |
-| `DOMAIN_VOLUNTARY_EXIT`      | `DomainType('0x04000000')` |
-| `DOMAIN_SELECTION_PROOF`     | `DomainType('0x05000000')` |
-| `DOMAIN_AGGREGATE_AND_PROOF` | `DomainType('0x06000000')` |
-| `DOMAIN_APPLICATION_MASK`    | `DomainType('0x00000001')` |
+*Note*: The default mainnet configuration values are included here for
+illustrative purposes. Defaults for this more dynamic type of configuration are
+available with the presets in the [`configs`](../../configs) directory. Testnets
+and other types of chain instances may use a different configuration.
 
-*Note*: `DOMAIN_APPLICATION_MASK` reserves the rest of the bitspace in
-`DomainType` for application usage. This means for some `DomainType`
-`DOMAIN_SOME_APPLICATION`, `DOMAIN_SOME_APPLICATION & DOMAIN_APPLICATION_MASK`
-**MUST** be non-zero. This expression for any other `DomainType` in the
-consensus specs **MUST** be zero.
+### Genesis settings
+
+| Name                                 | Value                                        |
+| ------------------------------------ | -------------------------------------------- |
+| `MIN_GENESIS_ACTIVE_VALIDATOR_COUNT` | `uint64(2**14)` (= 16,384)                   |
+| `MIN_GENESIS_TIME`                   | `uint64(1606824000)` (Dec 1, 2020, 12pm UTC) |
+| `GENESIS_FORK_VERSION`               | `Version('0x00000000')`                      |
+| `GENESIS_DELAY`                      | `uint64(604800)` (7 days)                    |
 
 <!-- NOTES-BEGIN -->
 
-These values are mixed into the messages of each type when those messages are being signed; this prevents messages signed for one purpose from being accidentally valid in another context.
+| `GENESIS_FORK_VERSION` | `Version('0x00000000')` |
+| - | - |
+
+See explanation of the `Version` type [above](#Custom-types). The version starting at 0 is self-explanatory (why not 1? Because we're computer scientists, not normal people, doge-dammit!).
+
+
+### Time parameters
+
+| Name                                  | Value                     |     Unit     |  Duration  |
+| ------------------------------------- | ------------------------- | :----------: | :--------: |
+| `SECONDS_PER_SLOT` *deprecated*       | `uint64(12)`              |   seconds    | 12 seconds |
+| `SLOT_DURATION_MS`                    | `uint64(12000)`           | milliseconds | 12 seconds |
+| `SECONDS_PER_ETH1_BLOCK`              | `uint64(14)`              |   seconds    | 14 seconds |
+| `MIN_VALIDATOR_WITHDRAWABILITY_DELAY` | `uint64(2**8)` (= 256)    |    epochs    | ~27 hours  |
+| `SHARD_COMMITTEE_PERIOD`              | `uint64(2**8)` (= 256)    |    epochs    | ~27 hours  |
+| `ETH1_FOLLOW_DISTANCE`                | `uint64(2**11)` (= 2,048) | Eth1 blocks  |  ~8 hours  |
+
+### Validator cycle
+
+| Name                        | Value                                   |
+| --------------------------- | --------------------------------------- |
+| `EJECTION_BALANCE`          | `Gwei(2**4 * 10**9)` (= 16,000,000,000) |
+| `MIN_PER_EPOCH_CHURN_LIMIT` | `uint64(2**2)` (= 4)                    |
+| `CHURN_LIMIT_QUOTIENT`      | `uint64(2**16)` (= 65,536)              |
 
 ## Containers
 
@@ -1180,6 +1245,16 @@ def bytes_to_uint64(data: bytes) -> uint64:
 
 Converts 8 bytes into a 64-bit integer.
 
+#### `saturating_sub`
+
+```python
+def saturating_sub(a: int, b: int) -> int:
+    """
+    Computes a - b, saturating at numeric bounds.
+    """
+    return a - b if a > b else 0
+```
+
 ### Crypto
 
 #### `hash`
@@ -1192,7 +1267,7 @@ Converts 8 bytes into a 64-bit integer.
 objects into a single root by utilizing a hash tree structure, as defined in the
 [SSZ spec](../../ssz/simple-serialize.md#merkleization).
 
-#### BLS Signatures
+#### BLS signatures
 
 The
 [IETF BLS signature draft standard v4](https://tools.ietf.org/html/draft-irtf-cfrg-bls-signature-04)
@@ -1220,7 +1295,9 @@ BLS is used [because of its aggregation-friendliness](https://ethresear.ch/t/pra
 
 ### Predicates
 
-#### `[Aside: note on a validator's life cycle]`
+<!-- NOTES-BEGIN -->
+
+**`[Aside: note on a validator's life cycle]`**
 
 _(This story begins right after the end of the previous aside on the deposit process)_
 
@@ -1258,6 +1335,8 @@ The third is included to prevent self-slashing from being a way to escape inacti
 Once a validator withdraws, in phase 0 they are effectively inert from the point of view of the protocol. In later phases, an explicit "withdraw" functionality will be added, which would move the validator's balance to the appropriate account in the appropriate shard on eth2.
 
 With this background (see also the [Validator struct definition](#Validator), hopefully the next four functions are reasonably self-explanatory:
+
+
 
 #### `is_active_validator`
 
@@ -1381,24 +1460,6 @@ A generic Merkle branch validity checker.
 
 ### Misc
 
-| Name                             | Value                     |
-| -------------------------------- | ------------------------- |
-| `MAX_COMMITTEES_PER_SLOT`        | `uint64(2**6)` (= 64)     |
-| `TARGET_COMMITTEE_SIZE`          | `uint64(2**7)` (= 128)    |
-| `MAX_VALIDATORS_PER_COMMITTEE`   | `uint64(2**11)` (= 2,048) |
-| `SHUFFLE_ROUND_COUNT`            | `uint64(90)`              |
-| `HYSTERESIS_QUOTIENT`            | `uint64(4)`               |
-| `HYSTERESIS_DOWNWARD_MULTIPLIER` | `uint64(1)`               |
-| `HYSTERESIS_UPWARD_MULTIPLIER`   | `uint64(5)`               |
-
-- For the safety of committees, `TARGET_COMMITTEE_SIZE` exceeds
-  [the recommended minimum committee size of 111](http://web.archive.org/web/20190504131341/https://vitalik.ca/files/Ithaca201807_Sharding.pdf);
-  with sufficient active validators (at least
-  `SLOTS_PER_EPOCH * TARGET_COMMITTEE_SIZE`), the shuffling algorithm ensures
-  committee sizes of at least `TARGET_COMMITTEE_SIZE`. (Unbiasable randomness
-  with a Verifiable Delay Function (VDF) will improve committee robustness and
-  lower the safe minimum committee size.)
-
 #### `compute_shuffled_index`
 
 ```python
@@ -1496,6 +1557,16 @@ def compute_committee(
 
 Take a slice of a validator index list (assumed to be the list of active validator indices), and returns the `index`'th slice (out of a total `count` slices) of the shuffle.
 
+#### `compute_time_at_slot`
+
+*Note*: This function is unsafe with respect to overflows and underflows.
+
+```python
+def compute_time_at_slot(state: BeaconState, slot: Slot) -> uint64:
+    slots_since_genesis = slot - GENESIS_SLOT
+    return uint64(state.genesis_time + slots_since_genesis * SECONDS_PER_SLOT)
+```
+
 #### `compute_epoch_at_slot`
 
 ```python
@@ -1549,22 +1620,6 @@ def compute_fork_data_root(current_version: Version, genesis_validators_root: Ro
 <!-- NOTES-BEGIN -->
 
 The root hash of the genesis validator set gets mixed into the fork version to add further domain separation, allowing chains with different genesises to automatically have different versions. This makes it easier to have many testnets with replay protection.
-
-#### `compute_fork_digest`
-
-```python
-def compute_fork_digest(current_version: Version, genesis_validators_root: Root) -> ForkDigest:
-    """
-    Return the 4-byte fork digest for the ``current_version`` and ``genesis_validators_root``.
-    This is a digest primarily used for domain separation on the p2p layer.
-    4-bytes suffices for practical separation of forks/chains.
-    """
-    return ForkDigest(compute_fork_data_root(current_version, genesis_validators_root)[:4])
-```
-
-<!-- NOTES-BEGIN -->
-
-The first four bytes of the fork digest are used on the p2p layer to separate validators of different chains into different networks.
 
 #### `compute_domain`
 
@@ -2048,60 +2103,6 @@ validator count criteria can also occur before `MIN_GENESIS_TIME`.
 
 The main function defined here, `initialize_beacon_state_from_eth1`, takes an eth1 block hash and timestamp and a list of deposits, and generates an eth2 genesis state. All clients will run this function to compute the genesis state when the chain launches for the first time.
 
-### Initialize beacon state from Eth1
-
-<!-- NOTES-BEGIN -->
-
-Before the Ethereum 2.0 genesis has been triggered, and for every Ethereum 1.0 block, let `candidate_state = initialize_beacon_state_from_eth1(eth1_block_hash, eth1_timestamp, deposits)` where:
-
-- `eth1_block_hash` is the hash of the Ethereum 1.0 block
-- `eth1_timestamp` is the Unix timestamp corresponding to `eth1_block_hash`
-- `deposits` is the sequence of all deposits, ordered chronologically, up to (and including) the block with hash `eth1_block_hash`
-
-Eth1 blocks must only be considered once they are at least `SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE` seconds old (i.e. `eth1_timestamp + SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE <= current_unix_time`). Due to this constraint, if `GENESIS_DELAY < SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE`, then the `genesis_time` can happen before the time/state is first known. Values should be configured to avoid this case.
-
-```python
-def initialize_beacon_state_from_eth1(eth1_block_hash: Bytes32,
-                                      eth1_timestamp: uint64,
-                                      deposits: Sequence[Deposit]) -> BeaconState:
-    fork = Fork(
-        previous_version=GENESIS_FORK_VERSION,
-        current_version=GENESIS_FORK_VERSION,
-        epoch=GENESIS_EPOCH,
-    )
-    state = BeaconState(
-        genesis_time=eth1_timestamp + GENESIS_DELAY,
-        fork=fork,
-        eth1_data=Eth1Data(block_hash=eth1_block_hash, deposit_count=len(deposits)),
-        latest_block_header=BeaconBlockHeader(body_root=hash_tree_root(BeaconBlockBody())),
-        randao_mixes=[eth1_block_hash] * EPOCHS_PER_HISTORICAL_VECTOR,  # Seed RANDAO with Eth1 entropy
-    )
-
-    # Process deposits
-    leaves = list(map(lambda deposit: deposit.data, deposits))
-    for index, deposit in enumerate(deposits):
-        deposit_data_list = List[DepositData, 2**DEPOSIT_CONTRACT_TREE_DEPTH](*leaves[:index + 1])
-        state.eth1_data.deposit_root = hash_tree_root(deposit_data_list)
-        process_deposit(state, deposit)
-
-    # Process activations
-    for index, validator in enumerate(state.validators):
-        balance = state.balances[index]
-        validator.effective_balance = min(balance - balance % EFFECTIVE_BALANCE_INCREMENT, MAX_EFFECTIVE_BALANCE)
-        if validator.effective_balance == MAX_EFFECTIVE_BALANCE:
-            validator.activation_eligibility_epoch = GENESIS_EPOCH
-            validator.activation_epoch = GENESIS_EPOCH
-
-    # Set genesis validators root for domain separation and chain versioning
-    state.genesis_validators_root = hash_tree_root(state.validators)
-
-    return state
-```
-
-<!-- NOTES-BEGIN -->
-
-*Note*: The ETH1 block with `eth1_timestamp` meeting the minimum genesis active validator count criteria can also occur before `MIN_GENESIS_TIME`.
-
 ### Genesis state
 
 Let `genesis_state = candidate_state` whenever
@@ -2190,68 +2191,6 @@ def process_slot(state: BeaconState) -> None:
 Here, we finally get to defining the main function in the spec, which defines how the state is to be modified when a block is processed. The function also has the ability to declare that the block is invalid (this is typically done with either `assert`s, though anything that causes the code to throw an exception, eg. out-of-range list accessed, as well as uint64 overflow or underflow, counts as the block being invalid).
 
 We start off with a high-level definition, that breaks it up into two parts: (i) a per-slot state transition (`process_slots`) that takes place in each slot regardless of whether or not there was a block there, and (ii) a per-block state transition that takes the block as an input. For example, if a block has slot 66 and its parent has slot 62, then the `process_slot` function would be called for all four slots in between (and `process_slot` would, in turn, call the epoch-boundary processing function `process_epoch`, because slot 64 is an epoch boundary, between epoch 1 [slots 32...63] and epoch 2 [slots 64...95]).
-
-### State transition
-
-<!-- NOTES-BEGIN -->
-
-The post-state corresponding to a pre-state `state` and a signed block `signed_block` is defined as `state_transition(state, signed_block)`. State transitions that trigger an unhandled exception (e.g. a failed `assert` or an out-of-range list access) are considered invalid. State transitions that cause a `uint64` overflow or underflow are also considered invalid.
-
-```python
-def state_transition(state: BeaconState, signed_block: SignedBeaconBlock, validate_result: bool=True) -> BeaconState:
-    block = signed_block.message
-    # Process slots (including those with no blocks) since block
-    process_slots(state, block.slot)
-    # Verify signature
-    if validate_result:
-        assert verify_block_signature(state, signed_block)
-    # Process block
-    process_block(state, block)
-    # Verify state root
-    if validate_result:
-        assert block.state_root == hash_tree_root(state)
-    # Return post-state
-    return state
-```
-
-```python
-def verify_block_signature(state: BeaconState, signed_block: SignedBeaconBlock) -> bool:
-    proposer = state.validators[signed_block.message.proposer_index]
-    signing_root = compute_signing_root(signed_block.message, get_domain(state, DOMAIN_BEACON_PROPOSER))
-    return bls.Verify(proposer.pubkey, signing_root, signed_block.signature)
-```
-
-```python
-def process_slots(state: BeaconState, slot: Slot) -> None:
-    assert state.slot < slot
-    while state.slot < slot:
-        process_slot(state)
-        # Process epoch on the start slot of the next epoch
-        if (state.slot + 1) % SLOTS_PER_EPOCH == 0:
-            process_epoch(state)
-        state.slot = Slot(state.slot + 1)
-```
-
-<!-- NOTES-BEGIN -->
-
-Processes all slots between the slot of the parent block and the input slot (which is the current slot), applying the `process_epoch` function if the slot progression crosses an epoch-boundary.
-
-<a id="process_slot_notes" />
-
-```python
-def process_slot(state: BeaconState) -> None:
-    # Cache state root
-    previous_state_root = hash_tree_root(state)
-    state.state_roots[state.slot % SLOTS_PER_HISTORICAL_ROOT] = previous_state_root
-    # Cache latest block header state root
-    if state.latest_block_header.state_root == Bytes32():
-        state.latest_block_header.state_root = previous_state_root
-    # Cache block root
-    previous_block_root = hash_tree_root(state.latest_block_header)
-    state.block_roots[state.slot % SLOTS_PER_HISTORICAL_ROOT] = previous_block_root
-```
-
-<!-- NOTES-BEGIN -->
 
 The main function of the `process_slot` function is to update the historical `block_roots` and `state_roots` arrays. The state root manipulation is needed as a clever trick to get around a challenging issue. Namely, we want to include the root of the block at slot `n` into the history in slot `n`. The most natural time to do this is, well, when we are processing the block. But this poses a problem to the block creator: the post-state root of the block can only be generated after the state transition is fully processed, but including the block root into the history during slot `n` would require the block's post-state root to be known during the state transition!
 
@@ -2771,50 +2710,103 @@ This is the code that processes the proportional slashing penalty rule described
 
 Note that we calculate penalties for a slashed validator _halfway through_ the 4-eek period that is both the mandatory withdrawal delay for slashed validators and the length of the slashings vector. This means that if you get slashed, your penalty is calculated based on the portion of validator slashed in the period (2 eeks before you were slashed ... 2 eeks after you were slashed). This is done because either of the alternatives (using the [4 eeks before..... time slashed] or [time slashed... 4 eeks after] timespans) run into the problem that even if very many validators were slashed around the same time, either the first or the last validators to be slashed would incur very small penalties.
 
-#### Final updates
+#### Eth1 data votes updates
 
 ```python
-def process_final_updates(state: BeaconState) -> None:
-    current_epoch = get_current_epoch(state)
-    next_epoch = Epoch(current_epoch + 1)
+def process_eth1_data_reset(state: BeaconState) -> None:
+    next_epoch = Epoch(get_current_epoch(state) + 1)
     # Reset eth1 data votes
     if next_epoch % EPOCHS_PER_ETH1_VOTING_PERIOD == 0:
         state.eth1_data_votes = []
+```
+
+<!-- NOTES-BEGIN -->
+
+Resetting eth1 data votes at the end of every 1024-slot (32-epoch) voting period
+
+#### Effective balances updates
+
+```python
+def process_effective_balance_updates(state: BeaconState) -> None:
     # Update effective balances with hysteresis
     for index, validator in enumerate(state.validators):
         balance = state.balances[index]
-        HYSTERESIS_INCREMENT = EFFECTIVE_BALANCE_INCREMENT // HYSTERESIS_QUOTIENT
+        HYSTERESIS_INCREMENT = uint64(EFFECTIVE_BALANCE_INCREMENT // HYSTERESIS_QUOTIENT)
         DOWNWARD_THRESHOLD = HYSTERESIS_INCREMENT * HYSTERESIS_DOWNWARD_MULTIPLIER
         UPWARD_THRESHOLD = HYSTERESIS_INCREMENT * HYSTERESIS_UPWARD_MULTIPLIER
         if (
             balance + DOWNWARD_THRESHOLD < validator.effective_balance
             or validator.effective_balance + UPWARD_THRESHOLD < balance
         ):
-            validator.effective_balance = min(balance - balance % EFFECTIVE_BALANCE_INCREMENT, MAX_EFFECTIVE_BALANCE)
+            validator.effective_balance = min(
+                balance - balance % EFFECTIVE_BALANCE_INCREMENT, MAX_EFFECTIVE_BALANCE
+            )
+```
+
+<!-- NOTES-BEGIN -->
+
+Updating validators' effective balances based on changes to their exact balances (see [the section on hysteresis](#hysteresis) for more details)
+
+#### Slashings balances updates
+
+```python
+def process_slashings_reset(state: BeaconState) -> None:
+    next_epoch = Epoch(get_current_epoch(state) + 1)
     # Reset slashings
     state.slashings[next_epoch % EPOCHS_PER_SLASHINGS_VECTOR] = Gwei(0)
+```
+
+<!-- NOTES-BEGIN -->
+
+Resets the value for the next epoch in the slashings vector to zero (so that by the end of the next epoch, the number in the slashings vector in that position reflects _just_ validators slashed in that epoch)
+
+#### Randao mixes updates
+
+```python
+def process_randao_mixes_reset(state: BeaconState) -> None:
+    current_epoch = get_current_epoch(state)
+    next_epoch = Epoch(current_epoch + 1)
     # Set randao mix
-    state.randao_mixes[next_epoch % EPOCHS_PER_HISTORICAL_VECTOR] = get_randao_mix(state, current_epoch)
+    state.randao_mixes[next_epoch % EPOCHS_PER_HISTORICAL_VECTOR] = get_randao_mix(
+        state, current_epoch
+    )
+```
+
+#### Historical roots updates
+
+```python
+def process_historical_roots_update(state: BeaconState) -> None:
     # Set historical root accumulator
+    next_epoch = Epoch(get_current_epoch(state) + 1)
     if next_epoch % (SLOTS_PER_HISTORICAL_ROOT // SLOTS_PER_EPOCH) == 0:
-        historical_batch = HistoricalBatch(block_roots=state.block_roots, state_roots=state.state_roots)
+        historical_batch = HistoricalBatch(
+            block_roots=state.block_roots, state_roots=state.state_roots
+        )
         state.historical_roots.append(hash_tree_root(historical_batch))
+```
+
+<!-- NOTES-BEGIN -->
+
+Updates some storage of historical variables (randomness seeds and historical batch roots)
+
+#### Participation records rotation
+
+```python
+def process_participation_record_updates(state: BeaconState) -> None:
     # Rotate current/previous epoch attestations
     state.previous_epoch_attestations = state.current_epoch_attestations
     state.current_epoch_attestations = []
 ```
 
-<!-- NOTES-BEGIN -->
-
-This function does a few miscellaneous operations, particularly:
-
-* Resetting eth1 data votes at the end of every 1024-slot (32-epoch) voting period
-* Updating validators' effective balances based on changes to their exact balances (see [the section on hysteresis](#hysteresis) for more details)
-* Resets the value for the next epoch in the slashings vector to zero (so that by the end of the next epoch, the number in the slashings vector in that position reflects _just_ validators slashed in that epoch)
-* Updates some storage of historical variables (randomness seeds and historical batch roots)
-* Shifts the list of `PendingAttestations` for the "current" epoch to the list meant for the "previous" epoch
-
 ### Block processing
+
+```python
+def process_block(state: BeaconState, block: BeaconBlock) -> None:
+    process_block_header(state, block)
+    process_randao(state, block.body)
+    process_eth1_data(state, block.body)
+    process_operations(state, block.body)
+```
 
 <!-- NOTES-BEGIN -->
 
@@ -3124,6 +3116,7 @@ def process_voluntary_exit(state: BeaconState, signed_voluntary_exit: SignedVolu
     # Initiate exit
     initiate_validator_exit(state, voluntary_exit.validator_index)
 ```
+
 <!-- NOTES-BEGIN -->
 
 Validators can voluntarily sign a message that can be included on-chain to exit the validator set. Note that there is a minimum active period of ~1 day before a validator can exit; this prevents validators from repeatedly depositing and withdrawing to try to get onto a particular shard committee, as well as polluting the deposit/withdraw queue in general.
