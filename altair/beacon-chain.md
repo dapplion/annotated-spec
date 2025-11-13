@@ -1,26 +1,19 @@
-# Ethereum 2.0 Altair Beacon chain changes
+# Altair -- The Beacon Chain
 
-This is an annotated version of the Altair beacon chain spec. 
-
-_See also: the [annotated sync protocol spec](./sync-protocol.md)._
-
-## Table of contents
-
-<!-- TOC -->
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
 
 - [Introduction](#introduction)
 - [Custom types](#custom-types)
 - [Constants](#constants)
   - [Participation flag indices](#participation-flag-indices)
   - [Incentivization weights](#incentivization-weights)
-  - [Misc](#misc)
-- [Configuration](#configuration)
-  - [Updated penalty values](#updated-penalty-values)
-  - [Sync committee](#sync-committee)
-  - [Misc](#misc-1)
   - [Domain types](#domain-types)
+  - [Misc](#misc)
+- [Preset](#preset)
+  - [Rewards and penalties](#rewards-and-penalties)
+  - [Sync committee](#sync-committee)
+- [Configuration](#configuration)
+  - [Inactivity penalties](#inactivity-penalties)
 - [Containers](#containers)
   - [Modified containers](#modified-containers)
     - [`BeaconBlockBody`](#beaconblockbody)
@@ -29,11 +22,12 @@ _See also: the [annotated sync protocol spec](./sync-protocol.md)._
     - [`SyncAggregate`](#syncaggregate)
     - [`SyncCommittee`](#synccommittee)
 - [Helper functions](#helper-functions)
-  - [`Predicates`](#predicates)
-    - [`eth2_fast_aggregate_verify`](#eth2_fast_aggregate_verify)
-  - [Misc](#misc-2)
+  - [Crypto](#crypto)
+  - [Misc](#misc-1)
     - [`add_flag`](#add_flag)
     - [`has_flag`](#has_flag)
+    - [`get_index_for_new_validator`](#get_index_for_new_validator)
+    - [`set_or_append_list`](#set_or_append_list)
   - [Beacon state accessors](#beacon-state-accessors)
     - [`get_next_sync_committee_indices`](#get_next_sync_committee_indices)
     - [`get_next_sync_committee`](#get_next_sync_committee)
@@ -47,19 +41,17 @@ _See also: the [annotated sync protocol spec](./sync-protocol.md)._
     - [Modified `slash_validator`](#modified-slash_validator)
   - [Block processing](#block-processing)
     - [Modified `process_attestation`](#modified-process_attestation)
-    - [Modified `process_deposit`](#modified-process_deposit)
-    - [Sync committee processing](#sync-committee-processing)
+    - [Modified `add_validator_to_registry`](#modified-add_validator_to_registry)
+    - [Sync aggregate processing](#sync-aggregate-processing)
   - [Epoch processing](#epoch-processing)
     - [Justification and finalization](#justification-and-finalization)
     - [Inactivity scores](#inactivity-scores)
-    - [Rewards and penalties](#rewards-and-penalties)
+    - [Rewards and penalties](#rewards-and-penalties-1)
     - [Slashings](#slashings)
     - [Participation flags updates](#participation-flags-updates)
     - [Sync committee updates](#sync-committee-updates)
-- [Initialize state for pure Altair testnets and test vectors](#initialize-state-for-pure-altair-testnets-and-test-vectors)
 
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-<!-- /TOC -->
+<!-- mdformat-toc end -->
 
 ## Introduction
 
@@ -167,49 +159,6 @@ If you are offline, then your rewards are roughly `-42/64 * B` (failing a timely
 
 If you are offline with probability `q`, then your rewards are `B * [(50/64 * p + 14/64 * p**2) * q - 42/64 * (1-q)]`, which simplifies to `B * [(42/64 + 50/64 * p + 14/64 * p**2) * q - 42/64]`. If `p` and `q` are both close to 1, then this simplifies to `B * (1 - 106/64 * (1-q) - 78/64 * (1-p))`. Hence, if _all_ other nodes are online, the uptime at which you break even is `42/106` (~39.6%). The break-even uptime for _the whole network_ (so, the minimum profitable uptime if you assume that _all_ nodes have that uptime, ie. `p = q`) is 2/3 (because at `p = 2/3` the reward is ~B * 0.2 and at `p < 2/3` the inactivity leak starts).
 
-### Misc
-
-| Name                         | Value                                                              |
-| ---------------------------- | ------------------------------------------------------------------ |
-| `PARTICIPATION_FLAG_WEIGHTS` | `[TIMELY_SOURCE_WEIGHT, TIMELY_TARGET_WEIGHT, TIMELY_HEAD_WEIGHT]` |
-
-## Configuration
-
-### Updated penalty values
-
-This patch updates a few configuration values to move penalty parameters closer to their final, maximum security values.
-
-*Note*: The spec does *not* override previous configuration values but instead creates new values and replaces usage throughout.
-
-| Name | Value |
-| - | - |
-| `INACTIVITY_PENALTY_QUOTIENT_ALTAIR` | `uint64(3 * 2**24)` (= 50,331,648) |
-| `MIN_SLASHING_PENALTY_QUOTIENT_ALTAIR` | `uint64(2**6)` (= 64) |
-| `PROPORTIONAL_SLASHING_MULTIPLIER_ALTAIR` | `uint64(2)` |
-
-<!-- NOTES-BEGIN -->
-
-* The inactivity penalty quotient is reduced by 25% from `2**26` to `3 * 2**24`. This should reduce the time that it takes for balances to leak by ~13.4% (as time-to-leak is proportional to the _square root_ of this quotient).
-* The minimum slashing penalty quotient is decreased from 128 to 64. This quotient is the minimum fraction of your total balance that a slashed validator will lose, so this change increases the minimum slashing penalty from 0.25 ETH to 0.5 ETH
-* The proportional slashing multiplier is increased from 1 to 2, meaning that the slashing penalty will now be _double_ the percentage of other validators that were slashed within 18 days of that validator. For example, if you are slashed and within 18 days [in both directions] 7% of other validators are also slashed, pre-Altair your slashing penalty would have been 7%, post-Altair it would be 14%.
-
-### Misc
-
-<!-- NOTES-BEGIN -->
-
-The sync committee is set to 512 validators, a relatively large and conservative size (compared to attestation and later shard proposal committees) to ensure safety. A sync committee is chosen once every ~1 day. Shorter periods would increase data load on light clients as they would need to sync more frequently, and longer periods would leave open too much opportunity to discover and corrupt committee members; ~1 day was chosen as the happy medium that fares reasonably well on both dimensions.
-
-### Misc
-
-**See [the sync protocol spec](./sync-protocol.md) for a description of what sync committees are and how the light client sync protocol works.**
-
-| Name | Value |
-| - | - |
-| `INACTIVITY_SCORE_BIAS` | `uint64(4)` |
-| `INACTIVITY_SCORE_RECOVERY RATE` | `uint64(16)` |
-
-See [the later section on inactivity penalty calculation](#modified-get_inactivity_penalty_deltas) for details on inactivity scores.
-
 ### Domain types
 
 | Name                                    | Value                      |
@@ -217,6 +166,52 @@ See [the later section on inactivity penalty calculation](#modified-get_inactivi
 | `DOMAIN_SYNC_COMMITTEE`                 | `DomainType('0x07000000')` |
 | `DOMAIN_SYNC_COMMITTEE_SELECTION_PROOF` | `DomainType('0x08000000')` |
 | `DOMAIN_CONTRIBUTION_AND_PROOF`         | `DomainType('0x09000000')` |
+
+### Misc
+
+| Name                         | Value                                                              |
+| ---------------------------- | ------------------------------------------------------------------ |
+| `PARTICIPATION_FLAG_WEIGHTS` | `[TIMELY_SOURCE_WEIGHT, TIMELY_TARGET_WEIGHT, TIMELY_HEAD_WEIGHT]` |
+
+<!-- NOTES-BEGIN -->
+
+The sync committee is set to 512 validators, a relatively large and conservative size (compared to attestation and later shard proposal committees) to ensure safety. A sync committee is chosen once every ~1 day. Shorter periods would increase data load on light clients as they would need to sync more frequently, and longer periods would leave open too much opportunity to discover and corrupt committee members; ~1 day was chosen as the happy medium that fares reasonably well on both dimensions.
+
+## Preset
+
+### Rewards and penalties
+
+This patch updates a few configuration values to move penalty parameters closer
+to their final, maximum security values.
+
+*Note*: The spec does *not* override previous configuration values but instead
+creates new values and replaces usage throughout.
+
+| Name                                      | Value                              |
+| ----------------------------------------- | ---------------------------------- |
+| `INACTIVITY_PENALTY_QUOTIENT_ALTAIR`      | `uint64(3 * 2**24)` (= 50,331,648) |
+| `MIN_SLASHING_PENALTY_QUOTIENT_ALTAIR`    | `uint64(2**6)` (= 64)              |
+| `PROPORTIONAL_SLASHING_MULTIPLIER_ALTAIR` | `uint64(2)`                        |
+
+### Sync committee
+
+| Name                               | Value                  | Unit       | Duration  |
+| ---------------------------------- | ---------------------- | ---------- | --------- |
+| `SYNC_COMMITTEE_SIZE`              | `uint64(2**9)` (= 512) | validators |           |
+| `EPOCHS_PER_SYNC_COMMITTEE_PERIOD` | `uint64(2**8)` (= 256) | epochs     | ~27 hours |
+
+## Configuration
+
+### Inactivity penalties
+
+| Name                             | Value                 | Description                      |
+| -------------------------------- | --------------------- | -------------------------------- |
+| `INACTIVITY_SCORE_BIAS`          | `uint64(2**2)` (= 4)  | score points per inactive epoch  |
+| `INACTIVITY_SCORE_RECOVERY_RATE` | `uint64(2**4)` (= 16) | score points per leak-free epoch |
+
+<!-- NOTES-BEGIN -->
+
+See [the later section on inactivity penalty calculation](#modified-get_inactivity_penalty_deltas) for details on inactivity scores.
 
 ## Containers
 
@@ -305,19 +300,13 @@ We store not just each individual pubkey, but also the sum of all the pubkeys. T
 
 ## Helper functions
 
-### `Predicates`
+### Crypto
 
-#### `eth2_fast_aggregate_verify`
-
-```python
-def eth2_fast_aggregate_verify(pubkeys: Sequence[BLSPubkey], message: Bytes32, signature: BLSSignature) -> bool:
-    """
-    Wrapper to ``bls.FastAggregateVerify`` accepting the ``G2_POINT_AT_INFINITY`` signature when ``pubkeys`` is empty.
-    """
-    if len(pubkeys) == 0 and signature == G2_POINT_AT_INFINITY:
-        return True
-    return bls.FastAggregateVerify(pubkeys, message, signature)
-```
+Refer to the definitions in the
+[phase 0 document regarding BLS signatures](../phase0/beacon-chain.md#bls-signatures)
+and the extensions defined in the [Altair BLS document](./bls.md). This
+specification assumes knowledge of the functionality described in those
+documents.
 
 <!-- NOTES-BEGIN -->
 
@@ -347,17 +336,31 @@ def has_flag(flags: ParticipationFlags, flag_index: int) -> bool:
     return flags & flag == flag
 ```
 
+#### `get_index_for_new_validator`
+
+```python
+def get_index_for_new_validator(state: BeaconState) -> ValidatorIndex:
+    return ValidatorIndex(len(state.validators))
+```
+
+#### `set_or_append_list`
+
+```python
+def set_or_append_list(list: List, index: ValidatorIndex, value: Any) -> None:
+    if index == len(list):
+        list.append(value)
+    else:
+        list[index] = value
+```
+
 ### Beacon state accessors
 
-#### `get_sync_committee_indices`
+#### `get_next_sync_committee_indices`
 
 ```python
 def get_next_sync_committee_indices(state: BeaconState) -> Sequence[ValidatorIndex]:
     """
-    Return the sequence of sync committee indices (which may include duplicate indices)
-    for the next sync committee, given a ``state`` at a sync committee period boundary.
-
-    Note: Committee can contain duplicate indices for small validator sets (< SYNC_COMMITTEE_SIZE + 128)
+    Return the sync committee indices, with possible duplicates, for the next sync committee.
     """
     epoch = Epoch(get_current_epoch(state) + 1)
 
@@ -368,7 +371,9 @@ def get_next_sync_committee_indices(state: BeaconState) -> Sequence[ValidatorInd
     i = 0
     sync_committee_indices: List[ValidatorIndex] = []
     while len(sync_committee_indices) < SYNC_COMMITTEE_SIZE:
-        shuffled_index = compute_shuffled_index(uint64(i % active_validator_count), active_validator_count, seed)
+        shuffled_index = compute_shuffled_index(
+            uint64(i % active_validator_count), active_validator_count, seed
+        )
         candidate_index = active_validator_indices[shuffled_index]
         random_byte = hash(seed + uint_to_bytes(uint64(i // 32)))[i % 32]
         effective_balance = state.validators[candidate_index].effective_balance
@@ -451,6 +456,8 @@ def get_base_reward(state: BeaconState, index: ValidatorIndex) -> Gwei:
     increments = state.validators[index].effective_balance // EFFECTIVE_BALANCE_INCREMENT
     return Gwei(increments * get_base_reward_per_increment(state))
 ```
+
+<!-- NOTES-BEGIN -->
 
 Note: A validator can optimally earn one base reward per epoch over a long time horizon.
 This takes into account both per-epoch (e.g. attestation) and intermittent duties (e.g. block proposal
@@ -729,72 +736,87 @@ The mathematical reasoning here is subtle. Here is the chart for how rewards are
 
 For example, we can focus on the `TIMELY_HEAD` duty. If you as a validator make an attestation to the correct head, and get it included in the next slot, you get the `TIMELY_HEAD` reward: `12/64` of a base reward. But we could instead think of it as _`12/56` of the non-proposal rewards_, where in turn the non-proposal rewards account for `56/64` (or `7/8`) of the whole pie. The proposer slice of the pie is allocated in the same proportions as the non-proposer slice of the pie: the proposer that _includes_ your timely-head attestation gets _`12/56` of the proposal rewards_ as a reward for doing so. If everyone (including the proposers) perform perfectly at everything, the non-proposer rewards add up to `56/64` of the base reward, and the proposer rewards themselves add up to `56/56` of the `8/64` proposer share (ie. the entire remaining `8/64` of the base reward), and so the combined rewards to everyone are exactly a full base reward.
 
-#### Modified `process_deposit`
+#### Modified `add_validator_to_registry`
 
-*Note*: The function `process_deposit` is modified to initialize `inactivity_scores`, `previous_epoch_participation`, and `current_epoch_participation`.
+*Note*: The function `add_validator_to_registry` is modified to initialize
+`inactivity_scores`, `previous_epoch_participation`, and
+`current_epoch_participation`.
 
 ```python
-def process_deposit(state: BeaconState, deposit: Deposit) -> None:
-    # Verify the Merkle branch
-    assert is_valid_merkle_branch(
-        leaf=hash_tree_root(deposit.data),
-        branch=deposit.proof,
-        depth=DEPOSIT_CONTRACT_TREE_DEPTH + 1,  # Add 1 for the List length mix-in
-        index=state.eth1_deposit_index,
-        root=state.eth1_data.deposit_root,
-    )
-
-    # Deposits must be processed in order
-    state.eth1_deposit_index += 1
-
-    pubkey = deposit.data.pubkey
-    amount = deposit.data.amount
-    validator_pubkeys = [validator.pubkey for validator in state.validators]
-    if pubkey not in validator_pubkeys:
-        # Verify the deposit signature (proof of possession) which is not checked by the deposit contract
-        deposit_message = DepositMessage(
-            pubkey=deposit.data.pubkey,
-            withdrawal_credentials=deposit.data.withdrawal_credentials,
-            amount=deposit.data.amount,
-        )
-        domain = compute_domain(DOMAIN_DEPOSIT)  # Fork-agnostic domain since deposits are valid across forks
-        signing_root = compute_signing_root(deposit_message, domain)
-        # Initialize validator if the deposit signature is valid
-        if bls.Verify(pubkey, signing_root, deposit.data.signature):
-            state.validators.append(get_validator_from_deposit(state, deposit))
-            state.balances.append(amount)
-            state.previous_epoch_participation.append(ParticipationFlags(0b0000_0000))
-            state.current_epoch_participation.append(ParticipationFlags(0b0000_0000))
-            state.inactivity_scores.append(uint64(0))
-    else:
-        # Increase balance by deposit amount
-        index = ValidatorIndex(validator_pubkeys.index(pubkey))
-        increase_balance(state, index, amount)
+def add_validator_to_registry(
+    state: BeaconState, pubkey: BLSPubkey, withdrawal_credentials: Bytes32, amount: uint64
+) -> None:
+    index = get_index_for_new_validator(state)
+    validator = get_validator_from_deposit(pubkey, withdrawal_credentials, amount)
+    set_or_append_list(state.validators, index, validator)
+    set_or_append_list(state.balances, index, amount)
+    # [New in Altair]
+    set_or_append_list(state.previous_epoch_participation, index, ParticipationFlags(0b0000_0000))
+    set_or_append_list(state.current_epoch_participation, index, ParticipationFlags(0b0000_0000))
+    set_or_append_list(state.inactivity_scores, index, uint64(0))
 ```
 
-#### Sync committee processing
+#### Sync aggregate processing
+
+*Note*: The function `process_sync_aggregate` is new.
 
 ```python
-def process_sync_aggregate(state: BeaconState, aggregate: SyncAggregate) -> None:
+def process_sync_aggregate(state: BeaconState, sync_aggregate: SyncAggregate) -> None:
     # Verify sync committee aggregate signature signing over the previous slot block root
     committee_pubkeys = state.current_sync_committee.pubkeys
-    participant_pubkeys = [pubkey for pubkey, bit in zip(committee_pubkeys, aggregate.sync_committee_bits) if bit]
+    committee_bits = sync_aggregate.sync_committee_bits
+    if sum(committee_bits) == SYNC_COMMITTEE_SIZE:
+        # All members participated - use precomputed aggregate key
+        participant_pubkeys = [state.current_sync_committee.aggregate_pubkey]
+    elif sum(committee_bits) > SYNC_COMMITTEE_SIZE // 2:
+        # More than half participated - subtract non-participant keys.
+        # First determine nonparticipating members
+        non_participant_pubkeys = [
+            pubkey for pubkey, bit in zip(committee_pubkeys, committee_bits) if not bit
+        ]
+        # Compute aggregate of non-participants
+        non_participant_aggregate = eth_aggregate_pubkeys(non_participant_pubkeys)
+        # Subtract non-participants from the full aggregate
+        # This is equivalent to: aggregate_pubkey + (-non_participant_aggregate)
+        participant_pubkey = bls.add(
+            bls.bytes48_to_G1(state.current_sync_committee.aggregate_pubkey),
+            bls.neg(bls.bytes48_to_G1(non_participant_aggregate)),
+        )
+        participant_pubkeys = [BLSPubkey(bls.G1_to_bytes48(participant_pubkey))]
+    else:
+        # Less than half participated - aggregate participant keys
+        participant_pubkeys = [
+            pubkey
+            for pubkey, bit in zip(committee_pubkeys, sync_aggregate.sync_committee_bits)
+            if bit
+        ]
     previous_slot = max(state.slot, Slot(1)) - Slot(1)
     domain = get_domain(state, DOMAIN_SYNC_COMMITTEE, compute_epoch_at_slot(previous_slot))
     signing_root = compute_signing_root(get_block_root_at_slot(state, previous_slot), domain)
-    assert eth2_fast_aggregate_verify(participant_pubkeys, signing_root, aggregate.sync_committee_signature)
+    # Note: eth_fast_aggregate_verify works with a singleton list containing an aggregated key
+    assert eth_fast_aggregate_verify(
+        participant_pubkeys, signing_root, sync_aggregate.sync_committee_signature
+    )
 
     # Compute participant and proposer rewards
     total_active_increments = get_total_active_balance(state) // EFFECTIVE_BALANCE_INCREMENT
     total_base_rewards = Gwei(get_base_reward_per_increment(state) * total_active_increments)
-    max_participant_rewards = Gwei(total_base_rewards * SYNC_REWARD_WEIGHT // WEIGHT_DENOMINATOR // SLOTS_PER_EPOCH)
+    max_participant_rewards = Gwei(
+        total_base_rewards * SYNC_REWARD_WEIGHT // WEIGHT_DENOMINATOR // SLOTS_PER_EPOCH
+    )
     participant_reward = Gwei(max_participant_rewards // SYNC_COMMITTEE_SIZE)
-    proposer_reward = Gwei(participant_reward * PROPOSER_WEIGHT // (WEIGHT_DENOMINATOR - PROPOSER_WEIGHT))
+    proposer_reward = Gwei(
+        participant_reward * PROPOSER_WEIGHT // (WEIGHT_DENOMINATOR - PROPOSER_WEIGHT)
+    )
 
-    # Apply participant and proposer rewards and non-participant penalties
+    # Apply participant and proposer rewards
     all_pubkeys = [v.pubkey for v in state.validators]
-    committee_indices = [ValidatorIndex(all_pubkeys.index(pubkey)) for pubkey in state.current_sync_committee.pubkeys]
-    for participant_index, participation_bit in zip(committee_indices, sync_aggregate.sync_committee_bits):
+    committee_indices = [
+        ValidatorIndex(all_pubkeys.index(pubkey)) for pubkey in state.current_sync_committee.pubkeys
+    ]
+    for participant_index, participation_bit in zip(
+        committee_indices, sync_aggregate.sync_committee_bits
+    ):
         if participation_bit:
             increase_balance(state, participant_index, participant_reward)
             increase_balance(state, get_beacon_proposer_index(state), proposer_reward)
@@ -896,17 +918,25 @@ See [here](#modified-get_inactivity_penalty_deltas) for what this function is do
 
 #### Rewards and penalties
 
-This patch updates a few configuration values to move penalty parameters closer
-to their final, maximum security values.
+*Note*: The function `process_rewards_and_penalties` is modified to support the
+incentive accounting reforms.
 
-*Note*: The spec does *not* override previous configuration values but instead
-creates new values and replaces usage throughout.
+```python
+def process_rewards_and_penalties(state: BeaconState) -> None:
+    # No rewards are applied at the end of `GENESIS_EPOCH` because rewards are for work done in the previous epoch
+    if get_current_epoch(state) == GENESIS_EPOCH:
+        return
 
-| Name                                      | Value                              |
-| ----------------------------------------- | ---------------------------------- |
-| `INACTIVITY_PENALTY_QUOTIENT_ALTAIR`      | `uint64(3 * 2**24)` (= 50,331,648) |
-| `MIN_SLASHING_PENALTY_QUOTIENT_ALTAIR`    | `uint64(2**6)` (= 64)              |
-| `PROPORTIONAL_SLASHING_MULTIPLIER_ALTAIR` | `uint64(2)`                        |
+    flag_deltas = [
+        get_flag_index_deltas(state, flag_index)
+        for flag_index in range(len(PARTICIPATION_FLAG_WEIGHTS))
+    ]
+    deltas = flag_deltas + [get_inactivity_penalty_deltas(state)]
+    for rewards, penalties in deltas:
+        for index in range(len(state.validators)):
+            increase_balance(state, ValidatorIndex(index), rewards[index])
+            decrease_balance(state, ValidatorIndex(index), penalties[index])
+```
 
 #### Slashings
 
@@ -960,55 +990,8 @@ def process_sync_committee_updates(state: BeaconState) -> None:
         state.current_sync_committee = state.next_sync_committee
         state.next_sync_committee = get_next_sync_committee(state)
 ```
+
 <!-- NOTES-BEGIN -->
 
 When a new sync committee period starts, compute the committee 1 period in the future and save it in the state. Also, move the prior next committee into the position of the current committee (as with the start of a new period, the "next" committee _becomes_ the "current" committee).
-
-## Initialize state for pure Altair testnets and test vectors
-
-This helper function is only for initializing the state for pure Altair testnets and tests.
-
-*Note*: The function `initialize_beacon_state_from_eth1` is modified: (1) using `ALTAIR_FORK_VERSION` as the current fork version, (2) utilizing the Altair `BeaconBlockBody` when constructing the initial `latest_block_header`, and (3) adding initial sync committees.
-
-```python
-def initialize_beacon_state_from_eth1(eth1_block_hash: Bytes32,
-                                      eth1_timestamp: uint64,
-                                      deposits: Sequence[Deposit]) -> BeaconState:
-    fork = Fork(
-        previous_version=GENESIS_FORK_VERSION,
-        current_version=ALTAIR_FORK_VERSION,  # [Modified in Altair]
-        epoch=GENESIS_EPOCH,
-    )
-    state = BeaconState(
-        genesis_time=eth1_timestamp + GENESIS_DELAY,
-        fork=fork,
-        eth1_data=Eth1Data(block_hash=eth1_block_hash, deposit_count=uint64(len(deposits))),
-        latest_block_header=BeaconBlockHeader(body_root=hash_tree_root(BeaconBlockBody())),
-        randao_mixes=[eth1_block_hash] * EPOCHS_PER_HISTORICAL_VECTOR,  # Seed RANDAO with Eth1 entropy
-    )
-
-    # Process deposits
-    leaves = list(map(lambda deposit: deposit.data, deposits))
-    for index, deposit in enumerate(deposits):
-        deposit_data_list = List[DepositData, 2**DEPOSIT_CONTRACT_TREE_DEPTH](*leaves[:index + 1])
-        state.eth1_data.deposit_root = hash_tree_root(deposit_data_list)
-        process_deposit(state, deposit)
-
-    # Process activations
-    for index, validator in enumerate(state.validators):
-        balance = state.balances[index]
-        validator.effective_balance = min(balance - balance % EFFECTIVE_BALANCE_INCREMENT, MAX_EFFECTIVE_BALANCE)
-        if validator.effective_balance == MAX_EFFECTIVE_BALANCE:
-            validator.activation_eligibility_epoch = GENESIS_EPOCH
-            validator.activation_epoch = GENESIS_EPOCH
-
-    # Set genesis validators root for domain separation and chain versioning
-    state.genesis_validators_root = hash_tree_root(state.validators)
-
-    # [New in Altair] Fill in sync committees
-    state.current_sync_committee = get_sync_committee(state, get_current_epoch(state))
-    state.next_sync_committee = get_sync_committee(state, get_current_epoch(state) + EPOCHS_PER_SYNC_COMMITTEE_PERIOD)
-
-    return state
-```
 

@@ -1,21 +1,16 @@
-# The Merge -- The Beacon Chain
+# Bellatrix -- The Beacon Chain
 
-**Notice**: This document is a work-in-progress for researchers and implementers.
-
-## Table of contents
-
-<!-- TOC -->
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
 
 - [Introduction](#introduction)
 - [Custom types](#custom-types)
-- [Constants](#constants)
+- [Preset](#preset)
+  - [Rewards and penalties](#rewards-and-penalties)
   - [Execution](#execution)
 - [Configuration](#configuration)
   - [Transition settings](#transition-settings)
 - [Containers](#containers)
-  - [Extended containers](#extended-containers)
+  - [Modified containers](#modified-containers)
     - [`BeaconBlockBody`](#beaconblockbody)
     - [`BeaconState`](#beaconstate)
   - [New containers](#new-containers)
@@ -23,23 +18,28 @@
     - [`ExecutionPayloadHeader`](#executionpayloadheader)
 - [Helper functions](#helper-functions)
   - [Predicates](#predicates)
-    - [`is_merge_complete`](#is_merge_complete)
-    - [`is_merge_block`](#is_merge_block)
+    - [`is_merge_transition_complete`](#is_merge_transition_complete)
+    - [`is_merge_transition_block`](#is_merge_transition_block)
     - [`is_execution_enabled`](#is_execution_enabled)
-  - [Misc](#misc)
-    - [`compute_timestamp_at_slot`](#compute_timestamp_at_slot)
+  - [Beacon state accessors](#beacon-state-accessors)
+    - [Modified `get_inactivity_penalty_deltas`](#modified-get_inactivity_penalty_deltas)
+  - [Beacon state mutators](#beacon-state-mutators)
+    - [Modified `slash_validator`](#modified-slash_validator)
 - [Beacon chain state transition function](#beacon-chain-state-transition-function)
   - [Execution engine](#execution-engine)
-    - [`execute_payload`](#execute_payload)
-    - [`notify_consensus_validated`](#notify_consensus_validated)
+    - [Request data](#request-data)
+      - [`NewPayloadRequest`](#newpayloadrequest)
+    - [Engine APIs](#engine-apis)
+    - [`notify_new_payload`](#notify_new_payload)
+    - [`is_valid_block_hash`](#is_valid_block_hash)
+    - [`verify_and_notify_new_payload`](#verify_and_notify_new_payload)
   - [Block processing](#block-processing)
-  - [Execution payload processing](#execution-payload-processing)
-    - [`is_valid_gas_limit`](#is_valid_gas_limit)
-    - [`process_execution_payload`](#process_execution_payload)
-- [Testing](#testing)
+    - [Execution payload](#execution-payload)
+      - [`process_execution_payload`](#process_execution_payload)
+  - [Epoch processing](#epoch-processing)
+    - [Slashings](#slashings)
 
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-<!-- /TOC -->
+<!-- mdformat-toc end -->
 
 ## Introduction
 
@@ -78,7 +78,21 @@ The parameters are expected to be set such that the beacon chain reaches the `ME
 
 The beacon chain uses [SSZ](https://github.com/ethereum/consensus-specs/blob/dev/ssz/simple-serialize.md) for serialization and SSZ + SHA256 for hashing, and the execution chain uses [RLP](https://eth.wiki/fundamentals/rlp) for serialization, and the keccak hash of the RLP serialized form for hashing. In the long term, it's a desired goal to move everything to SSZ. For now, however, because of the desire to finish the merge quickly, most of the execution chain remains RLP-based. Specifically, execution _blocks_ are stored in SSZ form, but the _transactions_ inside them are encoded with RLP, and so to software that only understands SSZ they are presented as "opaque" byte arrays. Note also that the `parent_hash` of an execution block is expected to match the keccak hash of the RLP-serialized form of the previous execution block.
 
-## Constants
+## Preset
+
+### Rewards and penalties
+
+Bellatrix updates a few configuration values to move penalty parameters to their
+final, maximum security values.
+
+*Note*: The spec does *not* override previous configuration values but instead
+creates new values and replaces usage throughout.
+
+| Name                                         | Value                          |
+| -------------------------------------------- | ------------------------------ |
+| `INACTIVITY_PENALTY_QUOTIENT_BELLATRIX`      | `uint64(2**24)` (= 16,777,216) |
+| `MIN_SLASHING_PENALTY_QUOTIENT_BELLATRIX`    | `uint64(2**5)` (= 32)          |
+| `PROPORTIONAL_SLASHING_MULTIPLIER_BELLATRIX` | `uint64(3)`                    |
 
 ### Execution
 
@@ -111,7 +125,7 @@ Note that if the `TERMINAL_BLOCK_HASH` is set to any value that is clearly not a
 
 ## Containers
 
-### Extended containers
+### Modified containers
 
 #### `BeaconBlockBody`
 
@@ -227,10 +241,10 @@ Same structure as above, except the transaction list is replaced by its SSZ hash
 
 ### Predicates
 
-#### `is_merge_complete`
+#### `is_merge_transition_complete`
 
 ```python
-def is_merge_complete(state: BeaconState) -> bool:
+def is_merge_transition_complete(state: BeaconState) -> bool:
     return state.latest_execution_payload_header != ExecutionPayloadHeader()
 ```
 
@@ -238,12 +252,14 @@ def is_merge_complete(state: BeaconState) -> bool:
 
 Returns whether or not the merge "has already happened", defined by whether or not there has already been an embedded execution block inside the beacon chain (if there has, its header is saved in `state.latest_execution_payload_header`).
 
-#### `is_merge_block`
+#### `is_merge_transition_block`
 
 ```python
-def is_merge_block(state: BeaconState, body: BeaconBlockBody) -> bool:
-    return not is_merge_complete(state) and body.execution_payload != ExecutionPayload()
+def is_merge_transition_block(state: BeaconState, body: BeaconBlockBody) -> bool:
+    return not is_merge_transition_complete(state) and body.execution_payload != ExecutionPayload()
 ```
+
+<!-- NOTES-BEGIN -->
 
 Returns whether or not a given block is the first block that contains an embedded execution block.
 
@@ -254,16 +270,69 @@ def is_execution_enabled(state: BeaconState, body: BeaconBlockBody) -> bool:
     return is_merge_transition_block(state, body) or is_merge_transition_complete(state)
 ```
 
-### Misc
+### Beacon state accessors
 
-#### `compute_timestamp_at_slot`
+#### Modified `get_inactivity_penalty_deltas`
 
-*Note*: This function is unsafe with respect to overflows and underflows.
+*Note*: The function `get_inactivity_penalty_deltas` is modified to use
+`INACTIVITY_PENALTY_QUOTIENT_BELLATRIX`.
 
 ```python
-def compute_timestamp_at_slot(state: BeaconState, slot: Slot) -> uint64:
-    slots_since_genesis = slot - GENESIS_SLOT
-    return uint64(state.genesis_time + slots_since_genesis * SECONDS_PER_SLOT)
+def get_inactivity_penalty_deltas(state: BeaconState) -> Tuple[Sequence[Gwei], Sequence[Gwei]]:
+    """
+    Return the inactivity penalty deltas by considering timely target participation flags and inactivity scores.
+    """
+    rewards = [Gwei(0) for _ in range(len(state.validators))]
+    penalties = [Gwei(0) for _ in range(len(state.validators))]
+    previous_epoch = get_previous_epoch(state)
+    matching_target_indices = get_unslashed_participating_indices(
+        state, TIMELY_TARGET_FLAG_INDEX, previous_epoch
+    )
+    for index in get_eligible_validator_indices(state):
+        if index not in matching_target_indices:
+            penalty_numerator = (
+                state.validators[index].effective_balance * state.inactivity_scores[index]
+            )
+            # [Modified in Bellatrix]
+            penalty_denominator = INACTIVITY_SCORE_BIAS * INACTIVITY_PENALTY_QUOTIENT_BELLATRIX
+            penalties[index] += Gwei(penalty_numerator // penalty_denominator)
+    return rewards, penalties
+```
+
+### Beacon state mutators
+
+#### Modified `slash_validator`
+
+*Note*: The function `slash_validator` is modified to use
+`MIN_SLASHING_PENALTY_QUOTIENT_BELLATRIX`.
+
+```python
+def slash_validator(
+    state: BeaconState, slashed_index: ValidatorIndex, whistleblower_index: ValidatorIndex = None
+) -> None:
+    """
+    Slash the validator with index ``slashed_index``.
+    """
+    epoch = get_current_epoch(state)
+    initiate_validator_exit(state, slashed_index)
+    validator = state.validators[slashed_index]
+    validator.slashed = True
+    validator.withdrawable_epoch = max(
+        validator.withdrawable_epoch, Epoch(epoch + EPOCHS_PER_SLASHINGS_VECTOR)
+    )
+    state.slashings[epoch % EPOCHS_PER_SLASHINGS_VECTOR] += validator.effective_balance
+    # [Modified in Bellatrix]
+    slashing_penalty = validator.effective_balance // MIN_SLASHING_PENALTY_QUOTIENT_BELLATRIX
+    decrease_balance(state, slashed_index, slashing_penalty)
+
+    # Apply proposer and whistleblower rewards
+    proposer_index = get_beacon_proposer_index(state)
+    if whistleblower_index is None:
+        whistleblower_index = proposer_index
+    whistleblower_reward = Gwei(validator.effective_balance // WHISTLEBLOWER_REWARD_QUOTIENT)
+    proposer_reward = Gwei(whistleblower_reward * PROPOSER_WEIGHT // WEIGHT_DENOMINATOR)
+    increase_balance(state, proposer_index, proposer_reward)
+    increase_balance(state, whistleblower_index, Gwei(whistleblower_reward - proposer_reward))
 ```
 
 ## Beacon chain state transition function
@@ -276,14 +345,73 @@ This function calls the execution client (formerly known as an "eth1 client"; eg
 
 Under normal operation, there is no possibility that the pre-state is unavailable, because a beacon block would only be validated if all of its ancestors have been validated, and that ensures that the previous execution blocks were validated and their post-state (and hence the latest block's pre-state) would already be computed. The only exception to this logic is the _first_ embedded execution block, whose parent (the terminal PoW block) is not in the beacon chain. If the terminal PoW block is unavailable, the beacon chain client should wait until the terminal PoW block becomes available before accepting the beacon block . Importantly, the beacon chain client should NOT "conclusively reject" a beacon block whose embedded execution block's parent is an unavailable terminal PoW block, because the terminal PoW block could become available very soon in the future. 
 
-#### `execute_payload`
+#### Request data
+
+##### `NewPayloadRequest`
 
 ```python
-def execute_payload(self: ExecutionEngine, execution_payload: ExecutionPayload) -> bool:
+@dataclass
+class NewPayloadRequest(object):
+    execution_payload: ExecutionPayload
+```
+
+#### Engine APIs
+
+The implementation-dependent `ExecutionEngine` protocol encapsulates the
+execution sub-system logic via:
+
+- a state object `self.execution_state` of type `ExecutionState`
+- a notification function `self.notify_new_payload` which may apply changes to
+  the `self.execution_state`
+
+The body of these functions are implementation dependent. The Engine API may be
+used to implement this and similarly defined functions via an external execution
+engine.
+
+#### `notify_new_payload`
+
+`notify_new_payload` is a function accessed through the `EXECUTION_ENGINE`
+module which instantiates the `ExecutionEngine` protocol.
+
+```python
+def notify_new_payload(self: ExecutionEngine, execution_payload: ExecutionPayload) -> bool:
     """
     Return ``True`` if and only if ``execution_payload`` is valid with respect to ``self.execution_state``.
     """
     ...
+```
+
+#### `is_valid_block_hash`
+
+```python
+def is_valid_block_hash(self: ExecutionEngine, execution_payload: ExecutionPayload) -> bool:
+    """
+    Return ``True`` if and only if ``execution_payload.block_hash`` is computed correctly.
+    """
+    ...
+```
+
+#### `verify_and_notify_new_payload`
+
+```python
+def verify_and_notify_new_payload(
+    self: ExecutionEngine, new_payload_request: NewPayloadRequest
+) -> bool:
+    """
+    Return ``True`` if and only if ``new_payload_request`` is valid with respect to ``self.execution_state``.
+    """
+    execution_payload = new_payload_request.execution_payload
+
+    if b"" in execution_payload.transactions:
+        return False
+
+    if not self.is_valid_block_hash(execution_payload):
+        return False
+
+    if not self.notify_new_payload(execution_payload):
+        return False
+
+    return True
 ```
 
 ### Block processing
@@ -310,36 +438,9 @@ The main addition to the `process_block` function is the `process_execution_payl
 
 Note that `process_execution_payload` is NOT the same as `execute_payload` defined above; rather, it's a function that calls `execute_payload` but also does a few other local validations.
 
-### Execution payload processing
+#### Execution payload
 
-#### `is_valid_gas_limit`
-
-```python
-def is_valid_gas_limit(payload: ExecutionPayload, parent: ExecutionPayloadHeader) -> bool:
-    parent_gas_limit = parent.gas_limit
-
-    # Check if the payload used too much gas
-    if payload.gas_used > payload.gas_limit:
-        return False
-
-    # Check if the payload changed the gas limit too much
-    if payload.gas_limit >= parent_gas_limit + parent_gas_limit // GAS_LIMIT_DENOMINATOR:
-        return False
-    if payload.gas_limit <= parent_gas_limit - parent_gas_limit // GAS_LIMIT_DENOMINATOR:
-        return False
-
-    # Check if the gas limit is at least the minimum gas limit
-    if payload.gas_limit < MIN_GAS_LIMIT:
-        return False
-
-    return True
-```
-
-<!-- NOTES-BEGIN -->
-
-Enforces the same gas limit checking as the Ethereum PoW chain does today.
-
-#### `process_execution_payload`
+##### `process_execution_payload`
 
 ```python
 def process_execution_payload(
@@ -380,3 +481,32 @@ def process_execution_payload(
 <!-- NOTES-BEGIN -->
 
 Verifies the consistency of the current execution block against the previous execution header stored in the beacon state. The validations that can be done using beacon chain state information alone are done here; everything "deep" is done by execution client validation.
+### Epoch processing
+
+#### Slashings
+
+*Note*: The function `process_slashings` is modified to use
+`PROPORTIONAL_SLASHING_MULTIPLIER_BELLATRIX`.
+
+```python
+def process_slashings(state: BeaconState) -> None:
+    epoch = get_current_epoch(state)
+    total_balance = get_total_active_balance(state)
+    adjusted_total_slashing_balance = min(
+        sum(state.slashings)
+        # [Modified in Bellatrix]
+        * PROPORTIONAL_SLASHING_MULTIPLIER_BELLATRIX,
+        total_balance,
+    )
+    for index, validator in enumerate(state.validators):
+        if (
+            validator.slashed
+            and epoch + EPOCHS_PER_SLASHINGS_VECTOR // 2 == validator.withdrawable_epoch
+        ):
+            increment = EFFECTIVE_BALANCE_INCREMENT  # Factored out from penalty numerator to avoid uint64 overflow
+            penalty_numerator = (
+                validator.effective_balance // increment * adjusted_total_slashing_balance
+            )
+            penalty = penalty_numerator // total_balance * increment
+            decrease_balance(state, ValidatorIndex(index), penalty)
+```

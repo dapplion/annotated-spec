@@ -42,52 +42,6 @@
 
 <!-- mdformat-toc end -->
 
-## Table of contents
-
-<!-- TOC -->
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-- [Introduction](#introduction)
-- [Custom types](#custom-types)
-- [Constants](#constants)
-  - [Blob](#blob)
-- [Preset](#preset)
-  - [Execution](#execution)
-- [Configuration](#configuration)
-  - [Validator cycle](#validator-cycle)
-- [Containers](#containers)
-  - [Extended containers](#extended-containers)
-    - [`BeaconBlockBody`](#beaconblockbody)
-    - [`ExecutionPayload`](#executionpayload)
-    - [`ExecutionPayloadHeader`](#executionpayloadheader)
-- [Helper functions](#helper-functions)
-  - [Misc](#misc)
-    - [`kzg_commitment_to_versioned_hash`](#kzg_commitment_to_versioned_hash)
-  - [Beacon state accessors](#beacon-state-accessors)
-    - [Modified `get_attestation_participation_flag_indices`](#modified-get_attestation_participation_flag_indices)
-    - [New `get_validator_activation_churn_limit`](#new-get_validator_activation_churn_limit)
-- [Beacon chain state transition function](#beacon-chain-state-transition-function)
-  - [Execution engine](#execution-engine)
-    - [Request data](#request-data)
-      - [Modified `NewPayloadRequest`](#modified-newpayloadrequest)
-    - [Engine APIs](#engine-apis)
-      - [`is_valid_block_hash`](#is_valid_block_hash)
-      - [`is_valid_versioned_hashes`](#is_valid_versioned_hashes)
-      - [Modified `notify_new_payload`](#modified-notify_new_payload)
-      - [Modified `verify_and_notify_new_payload`](#modified-verify_and_notify_new_payload)
-  - [Block processing](#block-processing)
-    - [Modified `process_attestation`](#modified-process_attestation)
-    - [Execution payload](#execution-payload)
-      - [Modified `process_execution_payload`](#modified-process_execution_payload)
-    - [Modified `process_voluntary_exit`](#modified-process_voluntary_exit)
-  - [Epoch processing](#epoch-processing)
-    - [Registry updates](#registry-updates)
-- [Testing](#testing)
-
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-<!-- /TOC -->
-
 ## Introduction
 
 Deneb is a consensus-layer upgrade containing a number of features. Including:
@@ -155,6 +109,17 @@ The `MAX_BLOB_COMMITMENTS_PER_BLOCK` corresponds to 4096 * 127 kB = 509 MB of bl
 
 ## Configuration
 
+### Execution
+
+| Name                  | Value       | Description                                                                                                    |
+| --------------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
+| `MAX_BLOBS_PER_BLOCK` | `uint64(6)` | *[New in Deneb:EIP4844]* maximum number of blobs in a single block limited by `MAX_BLOB_COMMITMENTS_PER_BLOCK` |
+
+*Note*: The blob transactions are packed into the execution payload by the
+EL/builder with their corresponding blobs being independently transmitted and
+are limited by `MAX_BLOB_GAS_PER_BLOCK // GAS_PER_BLOB`. However the CL limit is
+independently defined by `MAX_BLOBS_PER_BLOCK`.
+
 ### Validator cycle
 
 | Name                                   | Value                |
@@ -167,11 +132,7 @@ We add a new limit to the maximum number of validator activations that can take 
 
 ## Containers
 
-### Extended containers
-
-<!-- NOTES-BEGIN -->
-
-Note: `BeaconBlock` and `SignedBeaconBlock` types are updated indirectly.
+### Modified containers
 
 #### `BeaconBlockBody`
 
@@ -243,6 +204,41 @@ class ExecutionPayloadHeader(Container):
     blob_gas_used: uint64
     # [New in Deneb:EIP4844]
     excess_blob_gas: uint64
+```
+
+#### `BeaconState`
+
+```python
+class BeaconState(Container):
+    genesis_time: uint64
+    genesis_validators_root: Root
+    slot: Slot
+    fork: Fork
+    latest_block_header: BeaconBlockHeader
+    block_roots: Vector[Root, SLOTS_PER_HISTORICAL_ROOT]
+    state_roots: Vector[Root, SLOTS_PER_HISTORICAL_ROOT]
+    historical_roots: List[Root, HISTORICAL_ROOTS_LIMIT]
+    eth1_data: Eth1Data
+    eth1_data_votes: List[Eth1Data, EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH]
+    eth1_deposit_index: uint64
+    validators: List[Validator, VALIDATOR_REGISTRY_LIMIT]
+    balances: List[Gwei, VALIDATOR_REGISTRY_LIMIT]
+    randao_mixes: Vector[Bytes32, EPOCHS_PER_HISTORICAL_VECTOR]
+    slashings: Vector[Gwei, EPOCHS_PER_SLASHINGS_VECTOR]
+    previous_epoch_participation: List[ParticipationFlags, VALIDATOR_REGISTRY_LIMIT]
+    current_epoch_participation: List[ParticipationFlags, VALIDATOR_REGISTRY_LIMIT]
+    justification_bits: Bitvector[JUSTIFICATION_BITS_LENGTH]
+    previous_justified_checkpoint: Checkpoint
+    current_justified_checkpoint: Checkpoint
+    finalized_checkpoint: Checkpoint
+    inactivity_scores: List[uint64, VALIDATOR_REGISTRY_LIMIT]
+    current_sync_committee: SyncCommittee
+    next_sync_committee: SyncCommittee
+    # [Modified in Deneb:EIP4844]
+    latest_execution_payload_header: ExecutionPayloadHeader
+    next_withdrawal_index: WithdrawalIndex
+    next_withdrawal_validator_index: ValidatorIndex
+    historical_summaries: List[HistoricalSummary, HISTORICAL_ROOTS_LIMIT]
 ```
 
 ## Helper functions
@@ -618,65 +614,8 @@ def process_registry_updates(state: BeaconState) -> None:
         validator = state.validators[index]
         validator.activation_epoch = compute_activation_exit_epoch(get_current_epoch(state))
 ```
+
 <!-- NOTES-BEGIN -->
 
 *Note*: The function `process_registry_updates` is modified to utilize `get_validator_activation_churn_limit()` to rate limit the activation queue for EIP-7514.
-
-## Testing
-
-```python
-def initialize_beacon_state_from_eth1(eth1_block_hash: Hash32,
-                                      eth1_timestamp: uint64,
-                                      deposits: Sequence[Deposit],
-                                      execution_payload_header: ExecutionPayloadHeader=ExecutionPayloadHeader()
-                                      ) -> BeaconState:
-    fork = Fork(
-        previous_version=DENEB_FORK_VERSION,  # [Modified in Deneb] for testing only
-        current_version=DENEB_FORK_VERSION,  # [Modified in Deneb]
-        epoch=GENESIS_EPOCH,
-    )
-    state = BeaconState(
-        genesis_time=eth1_timestamp + GENESIS_DELAY,
-        fork=fork,
-        eth1_data=Eth1Data(block_hash=eth1_block_hash, deposit_count=uint64(len(deposits))),
-        latest_block_header=BeaconBlockHeader(body_root=hash_tree_root(BeaconBlockBody())),
-        randao_mixes=[eth1_block_hash] * EPOCHS_PER_HISTORICAL_VECTOR,  # Seed RANDAO with Eth1 entropy
-    )
-
-    # Process deposits
-    leaves = list(map(lambda deposit: deposit.data, deposits))
-    for index, deposit in enumerate(deposits):
-        deposit_data_list = List[DepositData, 2**DEPOSIT_CONTRACT_TREE_DEPTH](*leaves[:index + 1])
-        state.eth1_data.deposit_root = hash_tree_root(deposit_data_list)
-        process_deposit(state, deposit)
-
-    # Process activations
-    for index, validator in enumerate(state.validators):
-        balance = state.balances[index]
-        validator.effective_balance = min(balance - balance % EFFECTIVE_BALANCE_INCREMENT, MAX_EFFECTIVE_BALANCE)
-        if validator.effective_balance == MAX_EFFECTIVE_BALANCE:
-            validator.activation_eligibility_epoch = GENESIS_EPOCH
-            validator.activation_epoch = GENESIS_EPOCH
-
-    # Set genesis validators root for domain separation and chain versioning
-    state.genesis_validators_root = hash_tree_root(state.validators)
-
-    # Fill in sync committees
-    # Note: A duplicate committee is assigned for the current and next committee at genesis
-    state.current_sync_committee = get_next_sync_committee(state)
-    state.next_sync_committee = get_next_sync_committee(state)
-
-    # Initialize the execution payload header
-    # If empty, will initialize a chain that has not yet gone through the Merge transition
-    state.latest_execution_payload_header = execution_payload_header
-
-    return state
-```
-
-<!-- NOTES-BEGIN -->
-
-*Note*: The function `initialize_beacon_state_from_eth1` is modified for pure Deneb testing only.
-
-The `BeaconState` initialization is unchanged, except for the use of the updated `deneb.BeaconBlockBody` type
-when initializing the first body-root.
 

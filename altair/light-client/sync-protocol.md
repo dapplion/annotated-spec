@@ -1,30 +1,43 @@
-# Minimal Light Client
+# Altair Light Client -- Sync Protocol
 
-**Notice**: This document is a work-in-progress for researchers and implementers.
-
-## Table of contents
-
-<!-- TOC -->
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
 
 - [Introduction](#introduction)
+- [Custom types](#custom-types)
 - [Constants](#constants)
-- [Configuration](#configuration)
+- [Preset](#preset)
   - [Misc](#misc)
 - [Containers](#containers)
-  - [`LightClientSnapshot`](#lightclientsnapshot)
+  - [`LightClientHeader`](#lightclientheader)
+  - [`LightClientBootstrap`](#lightclientbootstrap)
   - [`LightClientUpdate`](#lightclientupdate)
+  - [`LightClientFinalityUpdate`](#lightclientfinalityupdate)
+  - [`LightClientOptimisticUpdate`](#lightclientoptimisticupdate)
   - [`LightClientStore`](#lightclientstore)
 - [Helper functions](#helper-functions)
+  - [`finalized_root_gindex_at_slot`](#finalized_root_gindex_at_slot)
+  - [`current_sync_committee_gindex_at_slot`](#current_sync_committee_gindex_at_slot)
+  - [`next_sync_committee_gindex_at_slot`](#next_sync_committee_gindex_at_slot)
+  - [`is_valid_light_client_header`](#is_valid_light_client_header)
+  - [`is_sync_committee_update`](#is_sync_committee_update)
+  - [`is_finality_update`](#is_finality_update)
+  - [`is_better_update`](#is_better_update)
+  - [`is_next_sync_committee_known`](#is_next_sync_committee_known)
+  - [`get_safety_threshold`](#get_safety_threshold)
   - [`get_subtree_index`](#get_subtree_index)
+  - [`is_valid_normalized_merkle_branch`](#is_valid_normalized_merkle_branch)
+  - [`compute_sync_committee_period_at_slot`](#compute_sync_committee_period_at_slot)
+- [Light client initialization](#light-client-initialization)
+  - [`initialize_light_client_store`](#initialize_light_client_store)
 - [Light client state updates](#light-client-state-updates)
-    - [`validate_light_client_update`](#validate_light_client_update)
-    - [`apply_light_client_update`](#apply_light_client_update)
-    - [`process_light_client_update`](#process_light_client_update)
+  - [`validate_light_client_update`](#validate_light_client_update)
+  - [`apply_light_client_update`](#apply_light_client_update)
+  - [`process_light_client_store_force_update`](#process_light_client_store_force_update)
+  - [`process_light_client_update`](#process_light_client_update)
+  - [`process_light_client_finality_update`](#process_light_client_finality_update)
+  - [`process_light_client_optimistic_update`](#process_light_client_optimistic_update)
 
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-<!-- /TOC -->
+<!-- mdformat-toc end -->
 
 ## Introduction
 
@@ -65,6 +78,14 @@ The minimum cost for light clients to track the chain is only about 25 kB per tw
 
 The extremely low cost for light clients is intended to help make the beacon chain light client friendly for extremely constrained environments. Such environments include mobile phones, embedded IoT devices, in-browser wallets and other blockchains (for cross-chain bridges).
 
+## Custom types
+
+| Name                         | SSZ equivalent                                              | Description                                                       |
+| ---------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------- |
+| `FinalityBranch`             | `Vector[Bytes32, floorlog2(FINALIZED_ROOT_GINDEX)]`         | Merkle branch of `finalized_checkpoint.root` within `BeaconState` |
+| `CurrentSyncCommitteeBranch` | `Vector[Bytes32, floorlog2(CURRENT_SYNC_COMMITTEE_GINDEX)]` | Merkle branch of `current_sync_committee` within `BeaconState`    |
+| `NextSyncCommitteeBranch`    | `Vector[Bytes32, floorlog2(NEXT_SYNC_COMMITTEE_GINDEX)]`    | Merkle branch of `next_sync_committee` within `BeaconState`       |
+
 ## Constants
 
 | Name                            | Value                                                                        |
@@ -77,7 +98,7 @@ The extremely low cost for light clients is intended to help make the beacon cha
 
 These values are the [generalized indices](https://github.com/ethereum/eth2.0-specs/blob/dev/ssz/merkle-proofs.md#generalized-merkle-tree-index) for the finalized checkpoint and the next sync committee in a `BeaconState`. A generalized index is a way of referring to a position of an object in a Merkle tree, so that the Merkle proof verification algorithm knows what path to check the hashes against.
 
-## Configuration
+## Preset
 
 ### Misc
 
@@ -88,20 +109,27 @@ These values are the [generalized indices](https://github.com/ethereum/eth2.0-sp
 
 ## Containers
 
-### `LightClientSnapshot`
+### `LightClientHeader`
 
 ```python
-class LightClientSnapshot(Container):
-    # Beacon block header
-    header: BeaconBlockHeader
-    # Sync committees corresponding to the header
-    current_sync_committee: SyncCommittee
-    next_sync_committee: SyncCommittee
+class LightClientHeader(Container):
+    beacon: BeaconBlockHeader
 ```
 
-<!-- NOTES-BEGIN -->
+Future upgrades may introduce additional fields to this structure, and validate
+them by extending
+[`is_valid_light_client_header`](#is_valid_light_client_header).
 
-The `LightClientSnapshot` represents the light client's view of the most recent block header that the light client is convinced is securely part of the chain. The light client stores the header itself, so that the light client can then ask for Merkle branches to authenticate transactions and state against the header. The light client also stores the current and next sync committees, so that it can verify the sync committee signatures of newer proposed headers.
+### `LightClientBootstrap`
+
+```python
+class LightClientBootstrap(Container):
+    # Header matching the requested beacon block root
+    header: LightClientHeader
+    # Current sync committee corresponding to `header.beacon.state_root`
+    current_sync_committee: SyncCommittee
+    current_sync_committee_branch: CurrentSyncCommitteeBranch
+```
 
 ### `LightClientUpdate`
 
@@ -133,6 +161,33 @@ A `LightClientUpdate` is an object passed over the wire (could be over a p2p net
 * **`sync_committee_bits`**: a bitfield showing who participated in the sync committee
 * **`sync_committee_signature`**: the signature
 * **`fork_version`**: needed to mix in to the data being signed (will be different across different hard forks and between mainnet and testnets)
+
+### `LightClientFinalityUpdate`
+
+```python
+class LightClientFinalityUpdate(Container):
+    # Header attested to by the sync committee
+    attested_header: LightClientHeader
+    # Finalized header corresponding to `attested_header.beacon.state_root`
+    finalized_header: LightClientHeader
+    finality_branch: FinalityBranch
+    # Sync committee aggregate signature
+    sync_aggregate: SyncAggregate
+    # Slot at which the aggregate signature was created (untrusted)
+    signature_slot: Slot
+```
+
+### `LightClientOptimisticUpdate`
+
+```python
+class LightClientOptimisticUpdate(Container):
+    # Header attested to by the sync committee
+    attested_header: LightClientHeader
+    # Sync committee aggregate signature
+    sync_aggregate: SyncAggregate
+    # Slot at which the aggregate signature was created (untrusted)
+    signature_slot: Slot
+```
 
 ### `LightClientStore`
 
@@ -169,6 +224,124 @@ The `snapshot` can be updated in two ways:
 
 ## Helper functions
 
+### `finalized_root_gindex_at_slot`
+
+```python
+def finalized_root_gindex_at_slot(_slot: Slot) -> GeneralizedIndex:
+    return FINALIZED_ROOT_GINDEX
+```
+
+### `current_sync_committee_gindex_at_slot`
+
+```python
+def current_sync_committee_gindex_at_slot(_slot: Slot) -> GeneralizedIndex:
+    return CURRENT_SYNC_COMMITTEE_GINDEX
+```
+
+### `next_sync_committee_gindex_at_slot`
+
+```python
+def next_sync_committee_gindex_at_slot(_slot: Slot) -> GeneralizedIndex:
+    return NEXT_SYNC_COMMITTEE_GINDEX
+```
+
+### `is_valid_light_client_header`
+
+```python
+def is_valid_light_client_header(_header: LightClientHeader) -> bool:
+    return True
+```
+
+### `is_sync_committee_update`
+
+```python
+def is_sync_committee_update(update: LightClientUpdate) -> bool:
+    return update.next_sync_committee_branch != NextSyncCommitteeBranch()
+```
+
+### `is_finality_update`
+
+```python
+def is_finality_update(update: LightClientUpdate) -> bool:
+    return update.finality_branch != FinalityBranch()
+```
+
+### `is_better_update`
+
+```python
+def is_better_update(new_update: LightClientUpdate, old_update: LightClientUpdate) -> bool:
+    # Compare supermajority (> 2/3) sync committee participation
+    max_active_participants = len(new_update.sync_aggregate.sync_committee_bits)
+    new_num_active_participants = sum(new_update.sync_aggregate.sync_committee_bits)
+    old_num_active_participants = sum(old_update.sync_aggregate.sync_committee_bits)
+    new_has_supermajority = new_num_active_participants * 3 >= max_active_participants * 2
+    old_has_supermajority = old_num_active_participants * 3 >= max_active_participants * 2
+    if new_has_supermajority != old_has_supermajority:
+        return new_has_supermajority
+    if not new_has_supermajority and new_num_active_participants != old_num_active_participants:
+        return new_num_active_participants > old_num_active_participants
+
+    # Compare presence of relevant sync committee
+    new_has_relevant_sync_committee = is_sync_committee_update(new_update) and (
+        compute_sync_committee_period_at_slot(new_update.attested_header.beacon.slot)
+        == compute_sync_committee_period_at_slot(new_update.signature_slot)
+    )
+    old_has_relevant_sync_committee = is_sync_committee_update(old_update) and (
+        compute_sync_committee_period_at_slot(old_update.attested_header.beacon.slot)
+        == compute_sync_committee_period_at_slot(old_update.signature_slot)
+    )
+    if new_has_relevant_sync_committee != old_has_relevant_sync_committee:
+        return new_has_relevant_sync_committee
+
+    # Compare indication of any finality
+    new_has_finality = is_finality_update(new_update)
+    old_has_finality = is_finality_update(old_update)
+    if new_has_finality != old_has_finality:
+        return new_has_finality
+
+    # Compare sync committee finality
+    if new_has_finality:
+        new_has_sync_committee_finality = compute_sync_committee_period_at_slot(
+            new_update.finalized_header.beacon.slot
+        ) == compute_sync_committee_period_at_slot(new_update.attested_header.beacon.slot)
+        old_has_sync_committee_finality = compute_sync_committee_period_at_slot(
+            old_update.finalized_header.beacon.slot
+        ) == compute_sync_committee_period_at_slot(old_update.attested_header.beacon.slot)
+        if new_has_sync_committee_finality != old_has_sync_committee_finality:
+            return new_has_sync_committee_finality
+
+    # Tiebreaker 1: Sync committee participation beyond supermajority
+    if new_num_active_participants != old_num_active_participants:
+        return new_num_active_participants > old_num_active_participants
+
+    # Tiebreaker 2: Prefer older data (fewer changes to best)
+    if new_update.attested_header.beacon.slot != old_update.attested_header.beacon.slot:
+        return new_update.attested_header.beacon.slot < old_update.attested_header.beacon.slot
+
+    # Tiebreaker 3: Prefer updates with earlier signature slots
+    return new_update.signature_slot < old_update.signature_slot
+```
+
+### `is_next_sync_committee_known`
+
+```python
+def is_next_sync_committee_known(store: LightClientStore) -> bool:
+    return store.next_sync_committee != SyncCommittee()
+```
+
+### `get_safety_threshold`
+
+```python
+def get_safety_threshold(store: LightClientStore) -> uint64:
+    return (
+        max(
+            store.previous_max_active_participants,
+            store.current_max_active_participants,
+        )
+        // 2
+    )
+```
+
 ### `get_subtree_index`
 
 ```python
@@ -179,6 +352,62 @@ def get_subtree_index(generalized_index: GeneralizedIndex) -> uint64:
 <!-- NOTES-BEGIN -->
 
 From a generalized index, return an integer whose bits, in least-to-greatest-place-value order, represent the Merkle path (0 = "left", 1 = "right", going from bottom to top) to get from a leaf to the root of a tree. Passed into the Merkle tree verification function used in other parts of the beacon chain spec.
+
+### `is_valid_normalized_merkle_branch`
+
+```python
+def is_valid_normalized_merkle_branch(
+    leaf: Bytes32, branch: Sequence[Bytes32], gindex: GeneralizedIndex, root: Root
+) -> bool:
+    depth = floorlog2(gindex)
+    index = get_subtree_index(gindex)
+    num_extra = len(branch) - depth
+    for i in range(num_extra):
+        if branch[i] != Bytes32():
+            return False
+    return is_valid_merkle_branch(leaf, branch[num_extra:], depth, index, root)
+```
+
+### `compute_sync_committee_period_at_slot`
+
+```python
+def compute_sync_committee_period_at_slot(slot: Slot) -> uint64:
+    return compute_sync_committee_period(compute_epoch_at_slot(slot))
+```
+
+## Light client initialization
+
+A light client maintains its state in a `store` object of type
+`LightClientStore`. `initialize_light_client_store` initializes a new `store`
+with a received `LightClientBootstrap` derived from a given
+`trusted_block_root`.
+
+### `initialize_light_client_store`
+
+```python
+def initialize_light_client_store(
+    trusted_block_root: Root, bootstrap: LightClientBootstrap
+) -> LightClientStore:
+    assert is_valid_light_client_header(bootstrap.header)
+    assert hash_tree_root(bootstrap.header.beacon) == trusted_block_root
+
+    assert is_valid_normalized_merkle_branch(
+        leaf=hash_tree_root(bootstrap.current_sync_committee),
+        branch=bootstrap.current_sync_committee_branch,
+        gindex=current_sync_committee_gindex_at_slot(bootstrap.header.beacon.slot),
+        root=bootstrap.header.beacon.state_root,
+    )
+
+    return LightClientStore(
+        finalized_header=bootstrap.header,
+        current_sync_committee=bootstrap.current_sync_committee,
+        next_sync_committee=SyncCommittee(),
+        best_valid_update=None,
+        optimistic_header=bootstrap.header,
+        previous_max_active_participants=0,
+        current_max_active_participants=0,
+    )
+```
 
 ## Light client state updates
 
@@ -200,7 +429,7 @@ From a generalized index, return an integer whose bits, in least-to-greatest-pla
 
 A light client maintains its state in a `store` object of type `LightClientStore` and receives `update` objects of type `LightClientUpdate`. Every `update` triggers `process_light_client_update(store, update, current_slot)` where `current_slot` is the current slot based on some local clock.
 
-#### `validate_light_client_update`
+### `validate_light_client_update`
 
 ```python
 def validate_light_client_update(
@@ -296,7 +525,7 @@ This function has 5 parts:
 4. **More basic validation**: confirm that the sync committee has more than zero participants.
 5. **Verify the signature**: remember that if the `update.finality_header` is provided, the signature that we are expecting is a valid signature of the `update.finality_header`; otherwise, we are expecting a valid signature of the `update.header`.
 
-#### `apply_light_client_update`
+### `apply_light_client_update`
 
 ```python
 def apply_light_client_update(store: LightClientStore, update: LightClientUpdate) -> None:
@@ -322,7 +551,28 @@ def apply_light_client_update(store: LightClientStore, update: LightClientUpdate
 
 This function is called only when it is time to update that snapshot header: either (1) when a new header is provided that corresponds to a finalized checkpoint of another header, or (2) after the timeout. In addition to simply updating the header, we also update the sync committees in the snapshot.
 
-#### `process_light_client_update`
+### `process_light_client_store_force_update`
+
+```python
+def process_light_client_store_force_update(store: LightClientStore, current_slot: Slot) -> None:
+    if (
+        current_slot > store.finalized_header.beacon.slot + UPDATE_TIMEOUT
+        and store.best_valid_update is not None
+    ):
+        # Forced best update when the update timeout has elapsed.
+        # Because the apply logic waits for `finalized_header.beacon.slot` to indicate sync committee finality,
+        # the `attested_header` may be treated as `finalized_header` in extended periods of non-finality
+        # to guarantee progression into later sync committee periods according to `is_better_update`.
+        if (
+            store.best_valid_update.finalized_header.beacon.slot
+            <= store.finalized_header.beacon.slot
+        ):
+            store.best_valid_update.finalized_header = store.best_valid_update.attested_header
+        apply_light_client_update(store, store.best_valid_update)
+        store.best_valid_update = None
+```
+
+### `process_light_client_update`
 
 ```python
 def process_light_client_update(
@@ -374,3 +624,44 @@ def process_light_client_update(
 <!-- NOTES-BEGIN -->
 
 The main function for processing a light client update. We first validate that it is correct; if it is correct, we at the very least save it as a speculative update. We then check if one of the two conditions for updating the snapshot is satisfied; if it is, then we update the snapshot.
+### `process_light_client_finality_update`
+
+```python
+def process_light_client_finality_update(
+    store: LightClientStore,
+    finality_update: LightClientFinalityUpdate,
+    current_slot: Slot,
+    genesis_validators_root: Root,
+) -> None:
+    update = LightClientUpdate(
+        attested_header=finality_update.attested_header,
+        next_sync_committee=SyncCommittee(),
+        next_sync_committee_branch=NextSyncCommitteeBranch(),
+        finalized_header=finality_update.finalized_header,
+        finality_branch=finality_update.finality_branch,
+        sync_aggregate=finality_update.sync_aggregate,
+        signature_slot=finality_update.signature_slot,
+    )
+    process_light_client_update(store, update, current_slot, genesis_validators_root)
+```
+
+### `process_light_client_optimistic_update`
+
+```python
+def process_light_client_optimistic_update(
+    store: LightClientStore,
+    optimistic_update: LightClientOptimisticUpdate,
+    current_slot: Slot,
+    genesis_validators_root: Root,
+) -> None:
+    update = LightClientUpdate(
+        attested_header=optimistic_update.attested_header,
+        next_sync_committee=SyncCommittee(),
+        next_sync_committee_branch=NextSyncCommitteeBranch(),
+        finalized_header=LightClientHeader(),
+        finality_branch=FinalityBranch(),
+        sync_aggregate=optimistic_update.sync_aggregate,
+        signature_slot=optimistic_update.signature_slot,
+    )
+    process_light_client_update(store, update, current_slot, genesis_validators_root)
+```

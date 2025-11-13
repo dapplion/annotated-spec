@@ -20,31 +20,6 @@
 
 <!-- mdformat-toc end -->
 
-## Table of contents
-
-<!-- TOC -->
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-- [Introduction](#introduction)
-- [Prerequisites](#prerequisites)
-- [Helpers](#helpers)
-  - [`BlobsBundle`](#blobsbundle)
-  - [Modified `GetPayloadResponse`](#modified-getpayloadresponse)
-- [Protocol](#protocol)
-  - [`ExecutionEngine`](#executionengine)
-    - [Modified `get_payload`](#modified-get_payload)
-- [Beacon chain responsibilities](#beacon-chain-responsibilities)
-  - [Block and sidecar proposal](#block-and-sidecar-proposal)
-    - [Constructing the `BeaconBlockBody`](#constructing-the-beaconblockbody)
-      - [ExecutionPayload](#executionpayload)
-      - [Blob KZG commitments](#blob-kzg-commitments)
-    - [Constructing the `BlobSidecar`s](#constructing-the-blobsidecars)
-      - [Sidecar](#sidecar)
-
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-<!-- /TOC -->
-
 ## Introduction
 
 This document represents the changes to be made in the code of an "honest
@@ -104,7 +79,7 @@ def compute_signed_block_header(signed_block: SignedBeaconBlock) -> SignedBeacon
     return SignedBeaconBlockHeader(message=block_header, signature=signed_block.signature)
 ```
 
-## Protocol
+## Protocols
 
 ### `ExecutionEngine`
 
@@ -264,6 +239,7 @@ the data-availability of these blobs throughout the network.
 
 After `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS` nodes MAY prune the sidecars
 and/or stop serving them.
+
 <!-- NOTES-BEGIN -->
 
 The `subnet_id` for the `blob_sidecar` is calculated with:

@@ -1,25 +1,24 @@
-# The Merge -- Fork Choice
+# Bellatrix -- Fork Choice
 
-**Notice**: This document is a work-in-progress for researchers and implementers.
-
-## Table of contents
-<!-- TOC -->
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
 
 - [Introduction](#introduction)
+- [Custom types](#custom-types)
 - [Protocols](#protocols)
   - [`ExecutionEngine`](#executionengine)
     - [`notify_forkchoice_updated`](#notify_forkchoice_updated)
+      - [`safe_block_hash`](#safe_block_hash)
+      - [`should_override_forkchoice_update`](#should_override_forkchoice_update)
 - [Helpers](#helpers)
+  - [`PayloadAttributes`](#payloadattributes)
   - [`PowBlock`](#powblock)
   - [`get_pow_block`](#get_pow_block)
   - [`is_valid_terminal_pow_block`](#is_valid_terminal_pow_block)
+  - [`validate_merge_block`](#validate_merge_block)
 - [Updated fork-choice handlers](#updated-fork-choice-handlers)
   - [`on_block`](#on_block)
 
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-<!-- /TOC -->
+<!-- mdformat-toc end -->
 
 ## Introduction
 
@@ -31,6 +30,12 @@ Unless stated explicitly, all prior functionality from
 
 *Note*: It introduces the process of transition from the last PoW block to the
 first PoS block.
+
+## Custom types
+
+| Name        | SSZ equivalent | Description                              |
+| ----------- | -------------- | ---------------------------------------- |
+| `PayloadId` | `Bytes8`       | Identifier of a payload building process |
 
 ## Protocols
 
@@ -84,11 +89,124 @@ conditions are met on the PoW network, i.e. there exists a block for which
 process to produce the merge transition block; the `head_block_hash` parameter
 MUST be set to the hash of a terminal PoW block in this case.
 
+##### `safe_block_hash`
+
+The `safe_block_hash` parameter MUST be set to return value of
+[`get_safe_execution_block_hash(store: Store)`](../../fork_choice/safe-block.md#get_safe_execution_block_hash)
+function.
+
+##### `should_override_forkchoice_update`
+
+If proposer boost re-orgs are implemented and enabled (see `get_proposer_head`)
+then additional care must be taken to ensure that the proposer is able to build
+an execution payload.
+
+If a beacon node knows it will propose the next block then it SHOULD NOT call
+`notify_forkchoice_updated` if it detects the current head to be weak and
+potentially capable of being re-orged. Complete information for evaluating
+`get_proposer_head` _will not_ be available immediately after the receipt of a
+new block, so an approximation of those conditions should be used when deciding
+whether to send or suppress a fork choice notification. The exact conditions
+used may be implementation-specific, a suggested implementation is below.
+
+Let `validator_is_connected(validator_index: ValidatorIndex) -> bool` be a
+function that indicates whether the validator with `validator_index` is
+connected to the node (e.g. has sent an unexpired proposer preparation message).
+
+```python
+def should_override_forkchoice_update(store: Store, head_root: Root) -> bool:
+    head_block = store.blocks[head_root]
+    parent_root = head_block.parent_root
+    parent_block = store.blocks[parent_root]
+    current_slot = get_current_slot(store)
+    proposal_slot = head_block.slot + Slot(1)
+
+    # Only re-org the head_block block if it arrived later than the attestation deadline.
+    head_late = is_head_late(store, head_root)
+
+    # Shuffling stable.
+    shuffling_stable = is_shuffling_stable(proposal_slot)
+
+    # FFG information of the new head_block will be competitive with the current head.
+    ffg_competitive = is_ffg_competitive(store, head_root, parent_root)
+
+    # Do not re-org if the chain is not finalizing with acceptable frequency.
+    finalization_ok = is_finalization_ok(store, proposal_slot)
+
+    # Only suppress the fork choice update if we are confident that we will propose the next block.
+    parent_state_advanced = store.block_states[parent_root].copy()
+    process_slots(parent_state_advanced, proposal_slot)
+    proposer_index = get_beacon_proposer_index(parent_state_advanced)
+    proposing_reorg_slot = validator_is_connected(proposer_index)
+
+    # Single slot re-org.
+    parent_slot_ok = parent_block.slot + 1 == head_block.slot
+    proposing_on_time = is_proposing_on_time(store)
+
+    # Note that this condition is different from `get_proposer_head`
+    current_time_ok = head_block.slot == current_slot or (
+        proposal_slot == current_slot and proposing_on_time
+    )
+    single_slot_reorg = parent_slot_ok and current_time_ok
+
+    # Check the head weight only if the attestations from the head slot have already been applied.
+    # Implementations may want to do this in different ways, e.g. by advancing
+    # `store.time` early, or by counting queued attestations during the head block's slot.
+    if current_slot > head_block.slot:
+        head_weak = is_head_weak(store, head_root)
+        parent_strong = is_parent_strong(store, parent_root)
+    else:
+        head_weak = True
+        parent_strong = True
+
+    return all(
+        [
+            head_late,
+            shuffling_stable,
+            ffg_competitive,
+            finalization_ok,
+            proposing_reorg_slot,
+            single_slot_reorg,
+            head_weak,
+            parent_strong,
+        ]
+    )
+```
+
+*Note*: The ordering of conditions is a suggestion only. Implementations are
+free to optimize by re-ordering the conditions from least to most expensive and
+by returning early if any of the early conditions are `False`.
+
+In case `should_override_forkchoice_update` returns `True`, a node SHOULD
+instead call `notify_forkchoice_updated` with parameters appropriate for
+building upon the parent block. Care must be taken to compute the correct
+`payload_attributes`, as they may change depending on the slot of the block to
+be proposed (due to withdrawals).
+
+If `should_override_forkchoice_update` returns `True` but `get_proposer_head`
+later chooses the canonical head rather than its parent, then this is a
+misprediction that will cause the node to construct a payload with less notice.
+The result of `get_proposer_head` MUST be preferred over the result of
+`should_override_forkchoice_update` (when proposer reorgs are enabled).
+
 ## Helpers
 
 <!-- NOTES-BEGIN -->
 
 This section provides the method for computing whether or not a PoW execution block referenced as a parent of the first embedded block is a valid terminal block. In addition for simply checking that the terminal PoW block is available and has been validated by the execution client, which the [post-merge beacon chain spec](./beacon-chain.md) already does implicitly, we need to check that it's a _valid_ terminal PoW block.
+
+### `PayloadAttributes`
+
+Used to signal to initiate the payload build process via
+`notify_forkchoice_updated`.
+
+```python
+@dataclass
+class PayloadAttributes(object):
+    timestamp: uint64
+    prev_randao: Bytes32
+    suggested_fee_recipient: ExecutionAddress
+```
 
 ### `PowBlock`
 
@@ -126,6 +244,33 @@ def is_valid_terminal_pow_block(block: PowBlock, parent: PowBlock) -> bool:
 <!-- NOTES-BEGIN -->
 
 There are two ways in which a block can be a valid terminal PoW block. First (and this is the normal case), it could be a PoW block that reaches the `TERMINAL_TOTAL_DIFFICULTY`. Note that only blocks _immediately_ past the `TERMINAL_TOTAL_DIFFICULTY` threshold (so, blocks whose parents are still below it) are allowed; this is part of a general rule that terminal PoW blocks can only have embedded execution blocks as valid children. Second (and this is an exceptional case to be configured only in the event of an attack or other emergency), the terminal PoW block can be chosen explicitly via its hash.
+
+### `validate_merge_block`
+
+```python
+def validate_merge_block(block: BeaconBlock) -> None:
+    """
+    Check the parent PoW block of execution payload is a valid terminal PoW block.
+
+    Note: Unavailable PoW block(s) may later become available,
+    and a client software MAY delay a call to ``validate_merge_block``
+    until the PoW block(s) become available.
+    """
+    if TERMINAL_BLOCK_HASH != Hash32():
+        # If `TERMINAL_BLOCK_HASH` is used as an override, the activation epoch must be reached.
+        assert compute_epoch_at_slot(block.slot) >= TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH
+        assert block.body.execution_payload.parent_hash == TERMINAL_BLOCK_HASH
+        return
+
+    pow_block = get_pow_block(block.body.execution_payload.parent_hash)
+    # Check if `pow_block` is available
+    assert pow_block is not None
+    pow_parent = get_pow_block(pow_block.parent_hash)
+    # Check if `pow_parent` is available
+    assert pow_parent is not None
+    # Check if `pow_block` is a valid terminal PoW block
+    assert is_valid_terminal_pow_block(pow_block, pow_parent)
+```
 
 ## Updated fork-choice handlers
 

@@ -11,22 +11,6 @@
 
 <!-- mdformat-toc end -->
 
-## Table of contents
-<!-- TOC -->
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-- [Introduction](#introduction)
-- [Containers](#containers)
-- [Helpers](#helpers)
-  - [Extended `PayloadAttributes`](#extended-payloadattributes)
-  - [`is_data_available`](#is_data_available)
-- [Updated fork-choice handlers](#updated-fork-choice-handlers)
-  - [`on_block`](#on_block)
-
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-<!-- /TOC -->
-
 ## Introduction
 
 This is the modification of the fork choice accompanying the Deneb upgrade.
@@ -37,11 +21,11 @@ This is the modification of the fork choice accompanying the Deneb upgrade.
 
 The most important new change is that for a `BeaconBlock` to be accepted, the client must have verified the availability of the underlying blob data. This is specified in an abstract way, to accommodate the fact that this is handled by direct downloading today, but will be handled with data availability sampling in the future.
 
-## Containers
-
 ## Helpers
 
-### Extended `PayloadAttributes`
+### Modified `PayloadAttributes`
+
+`PayloadAttributes` is extended with the parent beacon block root for EIP-4788.
 
 ```python
 @dataclass
@@ -50,7 +34,8 @@ class PayloadAttributes(object):
     prev_randao: Bytes32
     suggested_fee_recipient: ExecutionAddress
     withdrawals: Sequence[Withdrawal]
-    parent_beacon_block_root: Root  # [New in Deneb:EIP4788]
+    # [New in Deneb:EIP4788]
+    parent_beacon_block_root: Root
 ```
 
 <!-- NOTES-BEGIN -->
@@ -164,6 +149,7 @@ def on_block(store: Store, signed_block: SignedBeaconBlock) -> None:
     # Eagerly compute unrealized justification and finality.
     compute_pulled_up_tip(store, block_root)
 ```
+
 <!-- NOTES-BEGIN -->
 
 *Note*: The only modification is the addition of the blob data availability check.
